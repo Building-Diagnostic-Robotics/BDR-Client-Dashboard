@@ -1,0 +1,31 @@
+{
+  "name": "@bdr/services",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "8.10.163",
+    "@types/node": "22.20.2",
+    "typescript": "7.0.2",
+    "vitest": "5.0.0"
+  },
+  "dependencies": {
+    "@aws-sdk/client-cognito-identity-provider": "3.1131.0",
+    "@aws-sdk/client-dynamodb": "3.1131.0",
+    "@aws-sdk/client-kms": "3.1131.0",
+    "@aws-sdk/client-lambda": "3.1131.0",
+    "@aws-sdk/client-secrets-manager": "3.1131.0",
+    "@aws-sdk/client-s3": "3.1131.0",
+    "@aws-sdk/lib-dynamodb": "3.1131.0",
+    "@aws-sdk/s3-request-presigner": "3.1131.0",
+    "@bdr/contracts": "*",
+    "@bdr/domain": "*",
+    "jose": "6.2.12",
+    "zod": "4.6.4"
+  }
+}

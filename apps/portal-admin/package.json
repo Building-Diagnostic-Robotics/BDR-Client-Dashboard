@@ -1,0 +1,19 @@
+{
+  "name": "@bdr/portal-admin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "portal-admin": "./bin/portal-admin.mjs" },
+  "scripts": {
+    "cli": "node bin/portal-admin.mjs",
+    "build": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": { "@bdr/contracts": "*", "tsx": "4.23.13" },
+  "devDependencies": {
+    "@types/node": "22.20.2",
+    "typescript": "7.0.2",
+    "vitest": "5.0.0"
+  }
+}

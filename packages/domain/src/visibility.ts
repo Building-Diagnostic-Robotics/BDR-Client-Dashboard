@@ -1,0 +1,358 @@
+import type {
+  ClientIdentity,
+  ClientSession,
+  DocumentVersion,
+  Inspection,
+  Organization,
+  OrganizationDocument,
+  Project,
+  Report,
+  ReportType,
+  ReportVersion,
+} from "@bdr/contracts";
+
+import { authenticationRequired, forbidden, notFound } from "./errors";
+import {
+  identityKeys,
+  publishedArtifactKey,
+  sessionKeys,
+  tenantKeys,
+  type DynamoKey,
+} from "./keys";
+import { assertActiveClientSession } from "./sessions";
+
+export type ConsistentRead = Readonly<{ consistentRead: true }>;
+
+export interface ClientContextRepository {
+  getClientSession(key: DynamoKey, options: ConsistentRead): Promise<ClientSession | null>;
+  getClientIdentity(key: DynamoKey, options: ConsistentRead): Promise<ClientIdentity | null>;
+  getOrganization(key: DynamoKey, options: ConsistentRead): Promise<Organization | null>;
+}
+
+export interface ClientVisibilityRepository extends ClientContextRepository {
+  getProject(key: DynamoKey, options: ConsistentRead): Promise<Project | null>;
+  getInspection(key: DynamoKey, options: ConsistentRead): Promise<Inspection | null>;
+  getReport(key: DynamoKey, options: ConsistentRead): Promise<Report | null>;
+  getReportVersion(key: DynamoKey, options: ConsistentRead): Promise<ReportVersion | null>;
+  getOrganizationDocument(
+    key: DynamoKey,
+    options: ConsistentRead,
+  ): Promise<OrganizationDocument | null>;
+  getDocumentVersion(key: DynamoKey, options: ConsistentRead): Promise<DocumentVersion | null>;
+  queryProjects(organizationPk: string, options: ConsistentRead): Promise<readonly Project[]>;
+  queryInspections(
+    organizationPk: string,
+    projectId: string,
+    options: ConsistentRead,
+  ): Promise<readonly Inspection[]>;
+  queryReports(
+    organizationPk: string,
+    projectId: string,
+    inspectionId: string,
+    options: ConsistentRead,
+  ): Promise<readonly Report[]>;
+}
+
+const clientContextBrand: unique symbol = Symbol("ClientContext");
+
+export type ClientContext = Readonly<{
+  issuer: string;
+  sub: string;
+  userId: string;
+  organization: Organization;
+  [clientContextBrand]: true;
+}>;
+
+export type ArtifactDisposition = "VIEW" | "DOWNLOAD";
+
+export type AuthorizedArtifact = Readonly<{
+  key: string;
+  versionId: string;
+  disposition: ArtifactDisposition;
+  filename: string;
+}>;
+
+const consistentRead = { consistentRead: true } as const;
+
+export type ActiveClientAuthentication = Readonly<{
+  context: ClientContext;
+  session: ClientSession;
+  identity: ClientIdentity;
+}>;
+
+export async function loadActiveClientAuthentication(
+  repository: ClientContextRepository,
+  input: { rawSessionId: string; now: Date },
+): Promise<ActiveClientAuthentication> {
+  const session = await repository.getClientSession(
+    sessionKeys.clientSession(input.rawSessionId),
+    consistentRead,
+  );
+  assertActiveClientSession(session, input.rawSessionId, input.now);
+
+  const identity = await repository.getClientIdentity(
+    identityKeys.subject(session.issuer, session.sub),
+    consistentRead,
+  );
+  if (!identity || identity.issuer !== session.issuer || identity.sub !== session.sub) {
+    authenticationRequired();
+  }
+  if (identity.status !== "ACTIVE") forbidden();
+
+  const organization = await repository.getOrganization(
+    tenantKeys.organization(identity.organizationId),
+    consistentRead,
+  );
+  if (
+    !organization ||
+    organization.organizationId !== identity.organizationId ||
+    organization.status !== "ACTIVE"
+  ) {
+    forbidden();
+  }
+
+  return {
+    session,
+    identity,
+    context: {
+      issuer: session.issuer,
+      sub: session.sub,
+      userId: identity.userId,
+      organization,
+      [clientContextBrand]: true,
+    } as ClientContext,
+  };
+}
+
+function safeFilename(parts: readonly string[]): string {
+  const stem = parts
+    .join("-")
+    .normalize("NFKD")
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^[-_.]+|[-_.]+$/g, "")
+    .slice(0, 116);
+  return `${stem || "report"}.pdf`;
+}
+
+function reportName(reportType: ReportType): string {
+  return {
+    ASSESSMENT: "Roof-Assessment",
+    EVIDENCE: "Inspection-Evidence",
+    ROOF_TAKEOFF: "Roof-Takeoff",
+    CAPITAL_PLANNING: "Capital-Planning",
+  }[reportType];
+}
+
+export class ClientVisibilityPolicy {
+  constructor(private readonly repository: ClientVisibilityRepository) {}
+
+  async loadActiveClientContext(input: {
+    rawSessionId: string;
+    now: Date;
+  }): Promise<ClientContext> {
+    return (await loadActiveClientAuthentication(this.repository, input)).context;
+  }
+
+  async loadVisibleProject(context: ClientContext, projectId: string): Promise<Project> {
+    const project = await this.repository.getProject(
+      tenantKeys.project(context.organization.organizationId, projectId),
+      consistentRead,
+    );
+    if (
+      !project ||
+      project.organizationId !== context.organization.organizationId ||
+      project.projectId !== projectId ||
+      project.lifecycleStatus !== "ACTIVE"
+    ) {
+      notFound();
+    }
+    return project;
+  }
+
+  async loadVisibleInspection(
+    context: ClientContext,
+    projectId: string,
+    inspectionId: string,
+  ): Promise<Inspection> {
+    await this.loadVisibleProject(context, projectId);
+    const inspection = await this.repository.getInspection(
+      tenantKeys.inspection(context.organization.organizationId, projectId, inspectionId),
+      consistentRead,
+    );
+    if (
+      !inspection ||
+      inspection.organizationId !== context.organization.organizationId ||
+      inspection.projectId !== projectId ||
+      inspection.inspectionId !== inspectionId ||
+      inspection.lifecycleStatus !== "ACTIVE" ||
+      inspection.publicationStatus !== "PUBLISHED"
+    ) {
+      notFound();
+    }
+    return inspection;
+  }
+
+  async authorizeCurrentReportAccess(input: {
+    context: ClientContext;
+    projectId: string;
+    inspectionId: string;
+    reportType: ReportType;
+    disposition: ArtifactDisposition;
+  }): Promise<AuthorizedArtifact> {
+    const inspection = await this.loadVisibleInspection(
+      input.context,
+      input.projectId,
+      input.inspectionId,
+    );
+    const organizationId = input.context.organization.organizationId;
+    const report = await this.repository.getReport(
+      tenantKeys.report(organizationId, input.projectId, input.inspectionId, input.reportType),
+      consistentRead,
+    );
+    if (
+      !report ||
+      report.organizationId !== organizationId ||
+      report.projectId !== input.projectId ||
+      report.inspectionId !== input.inspectionId ||
+      report.reportType !== input.reportType ||
+      report.deliveryStatus !== "PUBLISHED" ||
+      report.currentVersionId === null
+    ) {
+      notFound();
+    }
+
+    const version = await this.repository.getReportVersion(
+      tenantKeys.reportVersion(
+        organizationId,
+        input.projectId,
+        input.inspectionId,
+        input.reportType,
+        report.currentVersionId,
+      ),
+      consistentRead,
+    );
+    if (
+      !version ||
+      version.organizationId !== organizationId ||
+      version.projectId !== input.projectId ||
+      version.inspectionId !== input.inspectionId ||
+      version.reportType !== input.reportType ||
+      version.reportVersionId !== report.currentVersionId ||
+      version.integrityStatus !== "VERIFIED" ||
+      version.s3Key !== publishedArtifactKey(report.currentVersionId) ||
+      !version.s3VersionId
+    ) {
+      notFound();
+    }
+
+    const project = await this.loadVisibleProject(input.context, input.projectId);
+    return {
+      key: version.s3Key,
+      versionId: version.s3VersionId,
+      disposition: input.disposition,
+      filename: safeFilename([
+        project.displayName,
+        reportName(input.reportType),
+        inspection.scannedAt.slice(0, 10),
+      ]),
+    };
+  }
+
+  async authorizeCurrentOrganizationDocumentAccess(input: {
+    context: ClientContext;
+    disposition: ArtifactDisposition;
+  }): Promise<AuthorizedArtifact> {
+    const organizationId = input.context.organization.organizationId;
+    const document = await this.repository.getOrganizationDocument(
+      tenantKeys.organizationDocument(organizationId),
+      consistentRead,
+    );
+    if (
+      !document ||
+      document.organizationId !== organizationId ||
+      document.documentType !== "HOW_TO_READ" ||
+      document.status !== "PUBLISHED" ||
+      document.currentVersionId === null
+    ) {
+      notFound();
+    }
+
+    const version = await this.repository.getDocumentVersion(
+      tenantKeys.documentVersion(organizationId, document.currentVersionId),
+      consistentRead,
+    );
+    if (
+      !version ||
+      version.organizationId !== organizationId ||
+      version.documentType !== "HOW_TO_READ" ||
+      version.documentVersionId !== document.currentVersionId ||
+      version.integrityStatus !== "VERIFIED" ||
+      version.s3Key !== publishedArtifactKey(document.currentVersionId) ||
+      !version.s3VersionId
+    ) {
+      notFound();
+    }
+
+    return {
+      key: version.s3Key,
+      versionId: version.s3VersionId,
+      disposition: input.disposition,
+      filename: safeFilename([input.context.organization.displayName, "How-to-Read"]),
+    };
+  }
+
+  async listVisibleProjects(context: ClientContext): Promise<readonly Project[]> {
+    const organizationId = context.organization.organizationId;
+    const organizationPk = tenantKeys.organization(organizationId).PK;
+    const projects = await this.repository.queryProjects(organizationPk, consistentRead);
+    return projects.filter(
+      (project) =>
+        project.organizationId === organizationId && project.lifecycleStatus === "ACTIVE",
+    );
+  }
+
+  async listVisibleInspections(
+    context: ClientContext,
+    projectId: string,
+  ): Promise<readonly Inspection[]> {
+    await this.loadVisibleProject(context, projectId);
+    const organizationId = context.organization.organizationId;
+    const inspections = await this.repository.queryInspections(
+      tenantKeys.organization(organizationId).PK,
+      projectId,
+      consistentRead,
+    );
+    return inspections
+      .filter(
+        (inspection) =>
+          inspection.organizationId === organizationId &&
+          inspection.projectId === projectId &&
+          inspection.lifecycleStatus === "ACTIVE" &&
+          inspection.publicationStatus === "PUBLISHED",
+      )
+      .slice()
+      .sort((left, right) => Date.parse(right.scannedAt) - Date.parse(left.scannedAt));
+  }
+
+  async listVisibleReportMetadata(
+    context: ClientContext,
+    projectId: string,
+    inspectionId: string,
+  ): Promise<readonly Report[]> {
+    await this.loadVisibleInspection(context, projectId, inspectionId);
+    const organizationId = context.organization.organizationId;
+    const reports = await this.repository.queryReports(
+      tenantKeys.organization(organizationId).PK,
+      projectId,
+      inspectionId,
+      consistentRead,
+    );
+    return reports.filter(
+      (report) =>
+        report.organizationId === organizationId &&
+        report.projectId === projectId &&
+        report.inspectionId === inspectionId,
+    );
+  }
+}

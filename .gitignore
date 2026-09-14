@@ -6,6 +6,8 @@ node_modules/
 dist/
 build/
 out/
+*.tsbuildinfo
+cdk.out/
 
 # Environment variables / secrets
 .env
@@ -24,3 +26,4 @@ pnpm-debug.log*
 # IDE
 .vscode/
 .idea/
+.npmrc
