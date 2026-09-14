@@ -67,9 +67,16 @@ export async function uploadPdf(client: PortalAdminClient, args: string[]) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     if (upload.uploadSession.state !== "UPLOADING") return upload.uploadSession;
     if (!upload.uploadUrl) throw new Error("Upload session returned no upload URL");
+    let response: Response;
     try {
-      const response = await fetch(upload.uploadUrl, { method: "PUT", headers: upload.requiredHeaders, body: await readFile(path) });
-      if (!response.ok) throw new Error(`S3 upload failed with ${response.status}`);
+      response = await fetch(upload.uploadUrl, { method: "PUT", headers: upload.requiredHeaders, body: await readFile(path) });
+    } catch (error) {
+      if (attempt === 1) throw error;
+      upload = uploadSessionResponseSchema.parse(await client.execute({ method: "POST", path: `/admin/organizations/${target.organizationId}/upload-sessions/${upload.uploadSession.uploadSessionId}/upload-url`, body: { target } }));
+      continue;
+    }
+    if (!response.ok) throw new Error(`S3 upload failed with ${response.status}`);
+    try {
       return uploadSessionSchema.parse(await client.execute({ method: "POST", path: `/admin/organizations/${target.organizationId}/upload-sessions/${upload.uploadSession.uploadSessionId}/complete`, body: { target } }));
     } catch (error) {
       if (attempt === 1) throw error;

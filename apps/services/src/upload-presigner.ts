@@ -22,7 +22,10 @@ export async function handler(request: Request) {
     IfNoneMatch: "*",
   });
   return {
-    uploadUrl: await getSignedUrl(s3, command, { expiresIn: 15 * 60 }),
+    uploadUrl: await getSignedUrl(s3, command, {
+      expiresIn: 15 * 60,
+      unhoistableHeaders: new Set(["x-amz-checksum-sha256"]),
+    }),
     requiredHeaders: {
       "content-type": "application/pdf",
       "content-length": String(request.sizeBytes),
