@@ -70,6 +70,13 @@ export type AuthorizedArtifact = Readonly<{
   versionId: string;
   disposition: ArtifactDisposition;
   filename: string;
+  publishedAt: string;
+}>;
+
+export type VisibleReportMetadata = Readonly<{
+  reportType: ReportType;
+  deliveryStatus: Report["deliveryStatus"];
+  publishedAt: string | null;
 }>;
 
 const consistentRead = { consistentRead: true } as const;
@@ -210,41 +217,14 @@ export class ClientVisibilityPolicy {
       tenantKeys.report(organizationId, input.projectId, input.inspectionId, input.reportType),
       consistentRead,
     );
-    if (
-      !report ||
-      report.organizationId !== organizationId ||
-      report.projectId !== input.projectId ||
-      report.inspectionId !== input.inspectionId ||
-      report.reportType !== input.reportType ||
-      report.deliveryStatus !== "PUBLISHED" ||
-      report.currentVersionId === null
-    ) {
-      notFound();
-    }
-
-    const version = await this.repository.getReportVersion(
-      tenantKeys.reportVersion(
-        organizationId,
-        input.projectId,
-        input.inspectionId,
-        input.reportType,
-        report.currentVersionId,
-      ),
-      consistentRead,
+    if (!report) notFound();
+    const version = await this.loadCurrentReportVersion(
+      organizationId,
+      input.projectId,
+      input.inspectionId,
+      input.reportType,
+      report,
     );
-    if (
-      !version ||
-      version.organizationId !== organizationId ||
-      version.projectId !== input.projectId ||
-      version.inspectionId !== input.inspectionId ||
-      version.reportType !== input.reportType ||
-      version.reportVersionId !== report.currentVersionId ||
-      version.integrityStatus !== "VERIFIED" ||
-      version.s3Key !== publishedArtifactKey(report.currentVersionId) ||
-      !version.s3VersionId
-    ) {
-      notFound();
-    }
 
     const project = await this.loadVisibleProject(input.context, input.projectId);
     return {
@@ -256,6 +236,7 @@ export class ClientVisibilityPolicy {
         reportName(input.reportType),
         inspection.scannedAt.slice(0, 10),
       ]),
+      publishedAt: version.publishedAt,
     };
   }
 
@@ -299,6 +280,7 @@ export class ClientVisibilityPolicy {
       versionId: version.s3VersionId,
       disposition: input.disposition,
       filename: safeFilename([input.context.organization.displayName, "How-to-Read"]),
+      publishedAt: version.publishedAt,
     };
   }
 
@@ -339,7 +321,7 @@ export class ClientVisibilityPolicy {
     context: ClientContext,
     projectId: string,
     inspectionId: string,
-  ): Promise<readonly Report[]> {
+  ): Promise<readonly VisibleReportMetadata[]> {
     await this.loadVisibleInspection(context, projectId, inspectionId);
     const organizationId = context.organization.organizationId;
     const reports = await this.repository.queryReports(
@@ -348,11 +330,77 @@ export class ClientVisibilityPolicy {
       inspectionId,
       consistentRead,
     );
-    return reports.filter(
+    const visibleReports = reports.filter(
       (report) =>
         report.organizationId === organizationId &&
         report.projectId === projectId &&
         report.inspectionId === inspectionId,
     );
+
+    return Promise.all(visibleReports.map(async (report) => {
+      if (report.deliveryStatus !== "PUBLISHED") {
+        return {
+          reportType: report.reportType,
+          deliveryStatus: report.deliveryStatus,
+          publishedAt: null,
+        };
+      }
+      const version = await this.loadCurrentReportVersion(
+        organizationId,
+        projectId,
+        inspectionId,
+        report.reportType,
+        report,
+      );
+      return {
+        reportType: report.reportType,
+        deliveryStatus: report.deliveryStatus,
+        publishedAt: version.publishedAt,
+      };
+    }));
+  }
+
+  private async loadCurrentReportVersion(
+    organizationId: string,
+    projectId: string,
+    inspectionId: string,
+    reportType: ReportType,
+    report: Report,
+  ): Promise<ReportVersion> {
+    if (
+      report.organizationId !== organizationId ||
+      report.projectId !== projectId ||
+      report.inspectionId !== inspectionId ||
+      report.reportType !== reportType ||
+      report.deliveryStatus !== "PUBLISHED" ||
+      report.currentVersionId === null
+    ) {
+      notFound();
+    }
+
+    const version = await this.repository.getReportVersion(
+      tenantKeys.reportVersion(
+        organizationId,
+        projectId,
+        inspectionId,
+        reportType,
+        report.currentVersionId,
+      ),
+      consistentRead,
+    );
+    if (
+      !version ||
+      version.organizationId !== organizationId ||
+      version.projectId !== projectId ||
+      version.inspectionId !== inspectionId ||
+      version.reportType !== reportType ||
+      version.reportVersionId !== report.currentVersionId ||
+      version.integrityStatus !== "VERIFIED" ||
+      version.s3Key !== publishedArtifactKey(report.currentVersionId) ||
+      !version.s3VersionId
+    ) {
+      notFound();
+    }
+    return version;
   }
 }

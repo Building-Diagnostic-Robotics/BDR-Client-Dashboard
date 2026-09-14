@@ -397,8 +397,9 @@ export class PortalStack extends Stack {
     this.addDynamoPolicy(clientBff, [tables.identity, tables.tenantData], [
       "GetItem",
       "Query",
+      "UpdateItem",
     ]);
-    this.addDynamoPolicy(clientBff, [tables.adminControl], ["GetItem"]);
+    this.addDynamoPolicy(clientBff, [tables.adminControl], ["GetItem", "UpdateItem"]);
     this.addDynamoPolicy(clientBff, [tables.session], [
       "GetItem",
       "PutItem",

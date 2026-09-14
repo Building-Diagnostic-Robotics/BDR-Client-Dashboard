@@ -225,6 +225,20 @@ describe("portal infrastructure", () => {
     expect(JSON.stringify(clientBffPolicy?.Properties?.PolicyDocument)).toContain(
       "dynamodb:ConditionCheckItem",
     );
+    const clientBffStatements = clientBffPolicy?.Properties?.PolicyDocument?.Statement as Array<{
+      Action?: string | string[];
+      Resource?: unknown;
+    }>;
+    const clientUpdateResources = clientBffStatements
+      .filter((statement) => {
+        const actions = Array.isArray(statement.Action) ? statement.Action : [statement.Action];
+        return actions.includes("dynamodb:UpdateItem");
+      })
+      .map((statement) => statement.Resource);
+    const clientUpdateResourcesJson = JSON.stringify(clientUpdateResources);
+    expect(clientUpdateResourcesJson).toContain("IdentityTable");
+    expect(clientUpdateResourcesJson).toContain("TenantDataTable");
+    expect(clientUpdateResourcesJson).toContain("AdminControlTable");
     expect(JSON.stringify(adminPolicy?.Properties?.PolicyDocument)).toContain("kms:Decrypt");
     expect(JSON.stringify(adminPolicy?.Properties?.PolicyDocument)).toContain("kms:GenerateDataKey*");
     expect(JSON.stringify(auditExporterPolicy?.Properties?.PolicyDocument)).toContain("kms:Decrypt");
