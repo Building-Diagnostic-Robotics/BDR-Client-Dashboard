@@ -1,0 +1,7 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["aws-lambda", "node", "vitest/globals"]
+  },
+  "include": ["src/**/*.ts"]
+}
