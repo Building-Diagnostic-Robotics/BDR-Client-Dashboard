@@ -64,7 +64,11 @@ function errorResponse(
     );
   }
   if (error instanceof ZodError) return json(400, { error: "invalid_request" });
-  console.error(JSON.stringify({ requestId: requestId(event), error: "client_bff_failure" }));
+  console.error(JSON.stringify({
+    requestId: requestId(event),
+    error: "client_bff_failure",
+    ...(error instanceof Error ? { errorName: error.name, errorMessage: error.message } : {}),
+  }));
   return json(500, { error: "internal_error" });
 }
 
@@ -124,6 +128,7 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
         const active = await dependencies.service.authenticate(event);
         const context = await dependencies.resources.policy.loadActiveClientContext({ rawSessionId: active.rawSessionId, now: new Date() });
         let matched: RegExpExecArray | null;
+        if (method === "GET" && path === "/bff/me") return json(200, dependencies.resources.me(context));
         if (method === "GET" && path === "/bff/me/projects") return json(200, { items: await dependencies.resources.projects(context) });
         if (method === "GET" && path === "/bff/me/documents/how-to-read") return json(200, await dependencies.resources.howToRead(context));
         if (method === "POST" && path === "/bff/me/documents/how-to-read/access") {

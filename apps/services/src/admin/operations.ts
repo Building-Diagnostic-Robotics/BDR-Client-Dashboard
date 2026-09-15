@@ -225,44 +225,47 @@ export class AwsPortalAdminOperations implements PortalAdminOperations {
       return parsed;
     }
     const userId = deterministicId("user", organizationId, invitationId);
-    return this.issueInvitation({ organizationId, userId, email: input.email, invitationId, cognitoUsername: `client_${invitationId}`, expectedUserRevision: null }, context);
+    return this.issueInvitation({ organizationId, userId, email: input.email, invitationId, expectedUserRevision: null }, context);
   }
 
   async resendInvitation(organizationId: string, invitationId: string, context: ActionContext) {
     const invitation = await this.require(this.config.tables.adminControl, adminControlKeys.invitation(organizationId, invitationId), adminInvitationSchema);
     if (!["PENDING", "EXPIRED", "DELIVERY_FAILED"].includes(invitation.status)) invalidState("Accepted or cancelled invitations cannot be resent");
     let sub = invitation.sub;
+    let cognitoUsername = invitation.sub ?? invitation.normalizedEmail;
     try {
       if (!sub) {
         try {
-          const existingUser = await this.cognito.send(new AdminGetUserCommand({ UserPoolId: this.config.clientUserPoolId, Username: invitation.cognitoUsername }));
+          const existingUser = await this.cognito.send(new AdminGetUserCommand({ UserPoolId: this.config.clientUserPoolId, Username: cognitoUsername }));
           sub = existingUser.UserAttributes?.find((attribute) => attribute.Name === "sub")?.Value ?? null;
+          cognitoUsername = existingUser.Username ?? cognitoUsername;
         } catch (error) {
           if (!(error instanceof Error) || error.name !== "UserNotFoundException") throw error;
         }
       }
       const result = await this.cognito.send(new AdminCreateUserCommand({
         UserPoolId: this.config.clientUserPoolId,
-        Username: invitation.cognitoUsername,
-        UserAttributes: [{ Name: "email", Value: invitation.email }, { Name: "email_verified", Value: "true" }],
+        Username: cognitoUsername,
+        UserAttributes: [{ Name: "email", Value: invitation.normalizedEmail }, { Name: "email_verified", Value: "true" }],
         ...(sub ? { MessageAction: "RESEND" as const } : {}),
       }));
       sub ??= result.User?.Attributes?.find((attribute) => attribute.Name === "sub")?.Value ?? null;
+      cognitoUsername = result.User?.Username ?? cognitoUsername;
       if (!sub) throw new Error("Cognito did not return a subject");
     } catch (error) {
       await this.markInvitationDeliveryFailed(invitation, context);
       throw error;
     }
-    const next = { ...invitation, sub, status: "PENDING" as const, absoluteExpiresAt: new Date(Date.now() + INVITATION_MS).toISOString(), ttlExpiresAt: null, acceptedAt: null, revision: revision() };
+    const next = { ...invitation, sub, cognitoUsername, status: "PENDING" as const, absoluteExpiresAt: new Date(Date.now() + INVITATION_MS).toISOString(), ttlExpiresAt: null, acceptedAt: null, revision: revision() };
     const actions: object[] = [];
     if (!invitation.sub) {
       const identity: ClientIdentity = { issuer: invitation.issuer, sub, organizationId, userId: invitation.userId, status: "INVITED", invitationId };
-      const user: Versioned<ClientUser> = { organizationId, userId: invitation.userId, email: invitation.email, normalizedEmail: invitation.normalizedEmail, status: "INVITED", currentIssuer: invitation.issuer, currentSub: sub, cognitoUsername: invitation.cognitoUsername, revision: revision() };
+      const user: Versioned<ClientUser> = { organizationId, userId: invitation.userId, email: invitation.email, normalizedEmail: invitation.normalizedEmail, status: "INVITED", currentIssuer: invitation.issuer, currentSub: sub, cognitoUsername, revision: revision() };
       actions.push(this.put(this.config.tables.identity, { ...identityKeys.subject(identity.issuer, sub), ...identity }));
       actions.push(this.put(this.config.tables.tenantData, { ...tenantKeys.user(organizationId, invitation.userId), ...user }));
     }
     actions.push(
-      this.update(this.config.tables.adminControl, adminControlKeys.invitation(organizationId, invitationId), "SET #status = :pending, absoluteExpiresAt = :expires, ttlExpiresAt = :ttl, acceptedAt = :accepted, #sub = :sub, revision = :next", "revision = :expected", { ":pending": "PENDING", ":expires": next.absoluteExpiresAt, ":ttl": null, ":accepted": null, ":sub": sub, ":next": next.revision, ":expected": invitation.revision }, { "#status": "status", "#sub": "sub" }),
+      this.update(this.config.tables.adminControl, adminControlKeys.invitation(organizationId, invitationId), "SET #status = :pending, absoluteExpiresAt = :expires, ttlExpiresAt = :ttl, acceptedAt = :accepted, #sub = :sub, cognitoUsername = :username, revision = :next", "revision = :expected", { ":pending": "PENDING", ":expires": next.absoluteExpiresAt, ":ttl": null, ":accepted": null, ":sub": sub, ":username": cognitoUsername, ":next": next.revision, ":expected": invitation.revision }, { "#status": "status", "#sub": "sub" }),
       this.audit(context, organizationId, "INVITATION_RESENT", { invitationId, userId: invitation.userId }),
     );
     await this.transact(actions);
@@ -282,7 +285,7 @@ export class AwsPortalAdminOperations implements PortalAdminOperations {
       actions.unshift(this.update(this.config.tables.tenantData, tenantKeys.user(organizationId, invitation.userId), "SET #status = :revoked, revision = :next", "organizationId = :organizationId", { ":revoked": "REVOKED", ":next": revision(), ":organizationId": organizationId }, { "#status": "status" }));
     }
     await this.transact(actions);
-    if (invitation.sub) await this.disableCognito(invitation.cognitoUsername);
+    if (invitation.sub) await this.disableCognito(invitation.sub);
     return next;
   }
 
@@ -290,7 +293,7 @@ export class AwsPortalAdminOperations implements PortalAdminOperations {
     const user = await this.require(this.config.tables.tenantData, tenantKeys.user(organizationId, userId), versionedUserSchema);
     if (user.status === "REVOKED") {
       await this.revokeSubjectSessions(user.currentIssuer, user.currentSub);
-      await this.disableCognito(user.cognitoUsername);
+      await this.disableCognito(user.currentSub);
       return user;
     }
     if (user.status !== "ACTIVE") invalidState("Cancel a pending invitation instead of revoking an invited user");
@@ -301,7 +304,7 @@ export class AwsPortalAdminOperations implements PortalAdminOperations {
       this.audit(context, organizationId, "USER_REVOKED", { userId }),
     ]);
     await this.revokeSubjectSessions(user.currentIssuer, user.currentSub);
-    await this.disableCognito(user.cognitoUsername);
+    await this.disableCognito(user.currentSub);
     return next;
   }
 
@@ -312,7 +315,7 @@ export class AwsPortalAdminOperations implements PortalAdminOperations {
     const invitationId = deterministicId("invite", `${organizationId}:${userId}:replacement`, input.idempotencyKey);
     const existing = await this.get(this.config.tables.adminControl, adminControlKeys.invitation(organizationId, invitationId));
     if (existing) return adminInvitationSchema.parse(existing);
-    return this.issueInvitation({ organizationId, userId, email: input.email, invitationId, cognitoUsername: `client_${invitationId}`, expectedUserRevision: user.revision }, context);
+    return this.issueInvitation({ organizationId, userId, email: input.email, invitationId, expectedUserRevision: user.revision }, context);
   }
 
   async listProjects(organizationId: string, input: ListInput) {
@@ -507,9 +510,9 @@ export class AwsPortalAdminOperations implements PortalAdminOperations {
     return document;
   }
 
-  private async issueInvitation(input: { organizationId: string; userId: string; email: string; invitationId: string; cognitoUsername: string; expectedUserRevision: string | null }, context: ActionContext): Promise<AdminInvitation> {
+  private async issueInvitation(input: { organizationId: string; userId: string; email: string; invitationId: string; expectedUserRevision: string | null }, context: ActionContext): Promise<AdminInvitation> {
     const normalizedEmail = normalizeEmail(input.email);
-    const pending: AdminInvitation = { invitationId: input.invitationId, organizationId: input.organizationId, userId: input.userId, email: input.email.trim(), normalizedEmail, status: "PENDING", absoluteExpiresAt: new Date(Date.now() + INVITATION_MS).toISOString(), ttlExpiresAt: null, acceptedAt: null, cognitoUsername: input.cognitoUsername, issuer: this.config.clientIssuer, sub: null, revision: revision() };
+    const pending: AdminInvitation = { invitationId: input.invitationId, organizationId: input.organizationId, userId: input.userId, email: input.email.trim(), normalizedEmail, status: "PENDING", absoluteExpiresAt: new Date(Date.now() + INVITATION_MS).toISOString(), ttlExpiresAt: null, acceptedAt: null, cognitoUsername: normalizedEmail, issuer: this.config.clientIssuer, sub: null, revision: revision() };
     await this.transact([
       this.condition(this.config.tables.tenantData, tenantKeys.organization(input.organizationId), "#status = :active", { ":active": "ACTIVE" }, { "#status": "status" }),
       this.put(this.config.tables.identity, { ...identityKeys.emailReservation(normalizedEmail), normalizedEmail, organizationId: input.organizationId, userId: input.userId, invitationId: input.invitationId }),
@@ -517,17 +520,19 @@ export class AwsPortalAdminOperations implements PortalAdminOperations {
       this.audit(context, input.organizationId, input.expectedUserRevision ? "USER_IDENTITY_REPLACEMENT_STARTED" : "USER_INVITATION_STARTED", { userId: input.userId, invitationId: input.invitationId }),
     ]);
     let sub: string;
+    let cognitoUsername = pending.cognitoUsername;
     try {
-      const result = await this.cognito.send(new AdminCreateUserCommand({ UserPoolId: this.config.clientUserPoolId, Username: input.cognitoUsername, UserAttributes: [{ Name: "email", Value: pending.email }, { Name: "email_verified", Value: "true" }] }));
+      const result = await this.cognito.send(new AdminCreateUserCommand({ UserPoolId: this.config.clientUserPoolId, Username: pending.cognitoUsername, UserAttributes: [{ Name: "email", Value: pending.normalizedEmail }, { Name: "email_verified", Value: "true" }] }));
       sub = result.User?.Attributes?.find((attribute) => attribute.Name === "sub")?.Value ?? "";
-      if (!sub) throw new Error("Cognito did not return a subject");
+      cognitoUsername = result.User?.Username ?? "";
+      if (!sub || !cognitoUsername) throw new Error("Cognito did not return a username and subject");
     } catch (error) {
       await this.markInvitationDeliveryFailed(pending, context);
       throw error;
     }
     const identity: ClientIdentity = { issuer: this.config.clientIssuer, sub, organizationId: input.organizationId, userId: input.userId, status: "INVITED", invitationId: input.invitationId };
-    const user: Versioned<ClientUser> = { organizationId: input.organizationId, userId: input.userId, email: pending.email, normalizedEmail, status: "INVITED", currentIssuer: this.config.clientIssuer, currentSub: sub, cognitoUsername: input.cognitoUsername, revision: revision() };
-    const finalized = { ...pending, sub, revision: revision() };
+    const user: Versioned<ClientUser> = { organizationId: input.organizationId, userId: input.userId, email: pending.email, normalizedEmail, status: "INVITED", currentIssuer: this.config.clientIssuer, currentSub: sub, cognitoUsername, revision: revision() };
+    const finalized = { ...pending, sub, cognitoUsername, revision: revision() };
     try {
       const userWrite = input.expectedUserRevision
         ? this.update(this.config.tables.tenantData, tenantKeys.user(input.organizationId, input.userId), "SET email = :email, normalizedEmail = :normalized, #status = :invited, currentIssuer = :issuer, currentSub = :sub, cognitoUsername = :username, revision = :next", "revision = :expected AND #status = :revoked", { ":email": user.email, ":normalized": normalizedEmail, ":invited": "INVITED", ":issuer": user.currentIssuer, ":sub": sub, ":username": user.cognitoUsername, ":next": user.revision, ":expected": input.expectedUserRevision, ":revoked": "REVOKED" }, { "#status": "status" })
@@ -535,12 +540,12 @@ export class AwsPortalAdminOperations implements PortalAdminOperations {
       await this.transact([
         this.put(this.config.tables.identity, { ...identityKeys.subject(identity.issuer, identity.sub), ...identity }),
         userWrite,
-        this.update(this.config.tables.adminControl, adminControlKeys.invitation(input.organizationId, input.invitationId), "SET #sub = :sub, revision = :next", "revision = :expected AND #status = :pending", { ":sub": sub, ":next": finalized.revision, ":expected": pending.revision, ":pending": "PENDING" }, { "#sub": "sub", "#status": "status" }),
+        this.update(this.config.tables.adminControl, adminControlKeys.invitation(input.organizationId, input.invitationId), "SET #sub = :sub, cognitoUsername = :username, revision = :next", "revision = :expected AND #status = :pending", { ":sub": sub, ":username": cognitoUsername, ":next": finalized.revision, ":expected": pending.revision, ":pending": "PENDING" }, { "#sub": "sub", "#status": "status" }),
         this.audit(context, input.organizationId, input.expectedUserRevision ? "USER_IDENTITY_REPLACEMENT_INVITED" : "USER_INVITED", { userId: input.userId, invitationId: input.invitationId }),
       ]);
       return finalized;
     } catch (error) {
-      try { await this.cognito.send(new AdminDeleteUserCommand({ UserPoolId: this.config.clientUserPoolId, Username: input.cognitoUsername })); } catch { /* reservation remains fail-closed */ }
+      try { await this.cognito.send(new AdminDeleteUserCommand({ UserPoolId: this.config.clientUserPoolId, Username: cognitoUsername })); } catch { /* reservation remains fail-closed */ }
       await this.markInvitationDeliveryFailed(pending, context);
       throw error;
     }

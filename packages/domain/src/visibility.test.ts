@@ -247,6 +247,7 @@ describe("central client visibility policy", () => {
       versionId: "s3-report-version",
       disposition: "DOWNLOAD",
       filename: "Midland-Business-Park-Roof-Assessment-2026-09-04.pdf",
+      publishedAt: "2026-09-07T15:00:00.000Z",
     });
   });
 
@@ -330,6 +331,7 @@ describe("central client visibility policy", () => {
       versionId: "s3-document-version",
       disposition: "VIEW",
       filename: "Midland-Holdings-How-to-Read.pdf",
+      publishedAt: "2026-08-18T15:00:00.000Z",
     });
     expect(repository.reads).toHaveLength(2);
     expect(repository.reads.some(({ key }) => key.SK.startsWith("PROJECT#"))).toBe(false);
@@ -349,6 +351,28 @@ describe("central client visibility policy", () => {
         context: clientContext,
         disposition: "VIEW",
       }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("returns client report metadata only after verifying the current published version", async () => {
+    const repository = new FixtureRepository();
+    const policy = new ClientVisibilityPolicy(repository);
+    const clientContext = await context(repository);
+
+    await expect(
+      policy.listVisibleReportMetadata(clientContext, projectId, inspectionId),
+    ).resolves.toEqual([{
+      reportType: "ASSESSMENT",
+      deliveryStatus: "PUBLISHED",
+      publishedAt: "2026-09-07T15:00:00.000Z",
+    }]);
+
+    repository.reportVersion = {
+      ...repository.reportVersion!,
+      s3Key: "versions/foreign_0123456789abcdef.pdf",
+    };
+    await expect(
+      policy.listVisibleReportMetadata(clientContext, projectId, inspectionId),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 });

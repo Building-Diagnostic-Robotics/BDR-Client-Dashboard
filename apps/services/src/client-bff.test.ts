@@ -143,4 +143,35 @@ describe("client BFF routes", () => {
       "request",
     );
   });
+
+  it("serves client-safe identity metadata from the authenticated context", async () => {
+    const me = vi.fn(() => ({ organization: { displayName: "Midland Holdings" } }));
+    const resources = {
+      policy: {
+        loadActiveClientContext: vi.fn(async () => ({
+          userId: identity.userId,
+          organization: {
+            organizationId: identity.organizationId,
+            displayName: "Midland Holdings",
+            status: "ACTIVE",
+          },
+        })),
+      },
+      me,
+    } as never;
+    const handler = createClientBffHandler({
+      portalOrigin: "https://portal.example.com",
+      service: service(),
+      resources,
+    });
+
+    const response = await handler(event("GET", "/bff/me"));
+
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body ?? "{}")).toEqual({
+      organization: { displayName: "Midland Holdings" },
+    });
+    expect(response.body).not.toContain(identity.userId);
+    expect(response.body).not.toContain(identity.organizationId);
+  });
 });

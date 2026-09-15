@@ -4,6 +4,12 @@ import { LambdaClient, InvokeCommand } from "@aws-sdk/client-lambda";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
 import {
+  artifactAccessResponseSchema,
+  clientInspectionSchema,
+  clientMeResponseSchema,
+  clientOrganizationDocumentMetadataSchema,
+  clientProjectSchema,
+  clientReportMetadataSchema,
   documentVersionSchema,
   inspectionSchema,
   organizationDocumentSchema,
@@ -25,6 +31,15 @@ import { auditKeys, ClientVisibilityPolicy, type AuthorizedArtifact, type Client
 import { DynamoClientAuthStore, type ClientRuntimeConfig } from "../auth/aws-client";
 
 type ResourceConfig = ClientRuntimeConfig & Readonly<{ artifactSignerFunctionName: string }>;
+
+function clientResponse<T>(
+  schema: { safeParse(value: unknown): { success: true; data: T } | { success: false } },
+  value: unknown,
+): T {
+  const result = schema.safeParse(value);
+  if (!result.success) throw new Error("Client response failed contract validation");
+  return result.data;
+}
 
 export class DynamoClientVisibilityRepository extends DynamoClientAuthStore implements ClientVisibilityRepository {
   private readonly document = DynamoDBDocumentClient.from(new DynamoDBClient({}), { marshallOptions: { removeUndefinedValues: true } });
@@ -65,15 +80,62 @@ export class ClientResourceService {
     this.policy = new ClientVisibilityPolicy(repository);
   }
 
-  async projects(context: ClientContext) { return this.policy.listVisibleProjects(context); }
-  async project(context: ClientContext, projectId: string) { return this.policy.loadVisibleProject(context, projectId); }
-  async inspections(context: ClientContext, projectId: string) { return this.policy.listVisibleInspections(context, projectId); }
-  async inspection(context: ClientContext, projectId: string, inspectionId: string) { return this.policy.loadVisibleInspection(context, projectId, inspectionId); }
-  async reports(context: ClientContext, projectId: string, inspectionId: string) { return this.policy.listVisibleReportMetadata(context, projectId, inspectionId); }
+  me(context: ClientContext) {
+    return clientResponse(clientMeResponseSchema, {
+      organization: { displayName: context.organization.displayName },
+    });
+  }
+
+  async projects(context: ClientContext) {
+    return (await this.policy.listVisibleProjects(context)).map((project) =>
+      clientResponse(clientProjectSchema, {
+        projectId: project.projectId,
+        displayName: project.displayName,
+        address: project.address,
+        timeZone: project.timeZone,
+      }));
+  }
+
+  async project(context: ClientContext, projectId: string) {
+    const project = await this.policy.loadVisibleProject(context, projectId);
+    return clientResponse(clientProjectSchema, {
+      projectId: project.projectId,
+      displayName: project.displayName,
+      address: project.address,
+      timeZone: project.timeZone,
+    });
+  }
+
+  async inspections(context: ClientContext, projectId: string) {
+    return (await this.policy.listVisibleInspections(context, projectId)).map((inspection) =>
+      clientResponse(clientInspectionSchema, {
+        inspectionId: inspection.inspectionId,
+        scannedAt: inspection.scannedAt,
+        scanTimeZone: inspection.scanTimeZone,
+      }));
+  }
+
+  async inspection(context: ClientContext, projectId: string, inspectionId: string) {
+    const inspection = await this.policy.loadVisibleInspection(context, projectId, inspectionId);
+    return clientResponse(clientInspectionSchema, {
+      inspectionId: inspection.inspectionId,
+      scannedAt: inspection.scannedAt,
+      scanTimeZone: inspection.scanTimeZone,
+    });
+  }
+
+  async reports(context: ClientContext, projectId: string, inspectionId: string) {
+    return (await this.policy.listVisibleReportMetadata(context, projectId, inspectionId)).map(
+      (report) => clientResponse(clientReportMetadataSchema, report),
+    );
+  }
 
   async howToRead(context: ClientContext) {
     const artifact = await this.policy.authorizeCurrentOrganizationDocumentAccess({ context, disposition: "VIEW" });
-    return { available: true, filename: artifact.filename };
+    return clientResponse(clientOrganizationDocumentMetadataSchema, {
+      filename: artifact.filename,
+      publishedAt: artifact.publishedAt,
+    });
   }
 
   async reportAccess(context: ClientContext, projectId: string, inspectionId: string, reportType: ReportType, disposition: "VIEW" | "DOWNLOAD", requestId: string) {
@@ -85,13 +147,22 @@ export class ClientResourceService {
   }
 
   private async sign(artifact: AuthorizedArtifact, context: ClientContext, requestId: string, action: string, target: Record<string, string>) {
-    const result = await this.lambda.send(new InvokeCommand({ FunctionName: this.config.artifactSignerFunctionName, InvocationType: "RequestResponse", Payload: Buffer.from(JSON.stringify(artifact)) }));
+    const result = await this.lambda.send(new InvokeCommand({
+      FunctionName: this.config.artifactSignerFunctionName,
+      InvocationType: "RequestResponse",
+      Payload: Buffer.from(JSON.stringify({
+        key: artifact.key,
+        versionId: artifact.versionId,
+        disposition: artifact.disposition,
+        filename: artifact.filename,
+      })),
+    }));
     if (result.FunctionError || !result.Payload) throw new Error("Artifact signer failed");
     const signed: unknown = JSON.parse(Buffer.from(result.Payload).toString("utf8"));
-    if (!signed || typeof signed !== "object" || !("url" in signed) || typeof signed.url !== "string") throw new Error("Artifact signer returned an invalid response");
+    const access = clientResponse(artifactAccessResponseSchema, signed);
     const occurredAt = new Date().toISOString();
     const eventId = `event_${randomUUID()}`;
     await this.dynamo.send(new PutCommand({ TableName: this.config.auditTableName, Item: { ...auditKeys.organization(context.organization.organizationId, occurredAt, eventId), eventId, organizationId: context.organization.organizationId, occurredAt, action, actorId: context.userId, actorSub: context.sub, requestId, target }, ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)" }));
-    return signed;
+    return access;
   }
 }
