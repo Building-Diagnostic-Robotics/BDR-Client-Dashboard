@@ -12,6 +12,7 @@ import type {
 import { invalidState } from "./errors";
 import {
   adminControlKeys,
+  auditExpiresAt,
   auditKeys,
   identityKeys,
   sessionKeys,
@@ -95,7 +96,10 @@ export function auditPut(event: AuditEventInput): TransactionPut {
   const key = event.organizationId
     ? auditKeys.organization(event.organizationId, event.occurredAt, event.eventId)
     : auditKeys.system(event.occurredAt, event.eventId);
-  return absentPut("AUDIT", key, event);
+  return absentPut("AUDIT", key, {
+    ...event,
+    ttlExpiresAt: auditExpiresAt(event.occurredAt),
+  });
 }
 
 export function buildCreateProjectTransaction(input: {

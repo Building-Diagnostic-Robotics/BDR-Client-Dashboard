@@ -12,6 +12,8 @@ The sole-administrator TOTP recovery procedure is documented in [docs/runbooks/a
 
 Before the CLI can be used in a new environment, follow the one-time [first-administrator bootstrap runbook](./docs/runbooks/bootstrap-first-admin.md). The API intentionally has no unauthenticated bootstrap route.
 
+Monthly locked audit exports, CloudTrail coverage, and alarm response are documented in [docs/runbooks/audit-operations.md](./docs/runbooks/audit-operations.md). After deploying an environment, subscribe a monitored destination to the `OperationalAlarmTopicArn` stack output.
+
 ## Development
 
 The repository is an npm workspace with the Next.js client in `apps/web`, Lambda entry points in `apps/services`, the local operator CLI in `apps/portal-admin`, shared runtime-validated contracts in `packages/contracts`, tenant authorization and persistence rules in `packages/domain`, and reusable AWS CDK infrastructure in `packages/infrastructure`.

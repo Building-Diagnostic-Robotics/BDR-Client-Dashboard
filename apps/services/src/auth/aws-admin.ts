@@ -11,7 +11,7 @@ import {
   type AdminProfile,
   type AdminSession,
 } from "@bdr/contracts";
-import { auditKeys, identityKeys, sessionKeys } from "@bdr/domain";
+import { auditExpiresAt, auditKeys, identityKeys, sessionKeys } from "@bdr/domain";
 
 import type { AdminAuthConfig, AdminAuthStore, AdminCognitoVerifier } from "./admin";
 
@@ -166,6 +166,7 @@ export class DynamoAdminAuthStore implements AdminAuthStore {
                 ...auditKeys.system(occurredAt, eventId),
                 eventId,
                 occurredAt,
+                ttlExpiresAt: auditExpiresAt(occurredAt),
                 action: "ADMIN_LOGIN",
                 actorId: input.profile.adminId,
                 actorSub: input.identity.sub,
@@ -199,6 +200,7 @@ export class DynamoAdminAuthStore implements AdminAuthStore {
                 ...auditKeys.system(input.revokedAt, eventId),
                 eventId,
                 occurredAt: input.revokedAt,
+                ttlExpiresAt: auditExpiresAt(input.revokedAt),
                 action: "ADMIN_SESSION_REVOKED",
                 actorId: input.adminId,
                 requestId: input.requestId,

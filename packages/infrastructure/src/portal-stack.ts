@@ -13,7 +13,12 @@ import * as apigwv2 from "aws-cdk-lib/aws-apigatewayv2";
 import * as authorizers from "aws-cdk-lib/aws-apigatewayv2-authorizers";
 import * as integrations from "aws-cdk-lib/aws-apigatewayv2-integrations";
 import * as cognito from "aws-cdk-lib/aws-cognito";
+import * as cloudtrail from "aws-cdk-lib/aws-cloudtrail";
+import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
+import * as cloudwatchActions from "aws-cdk-lib/aws-cloudwatch-actions";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
+import * as events from "aws-cdk-lib/aws-events";
+import * as eventTargets from "aws-cdk-lib/aws-events-targets";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as kms from "aws-cdk-lib/aws-kms";
 import * as lambda from "aws-cdk-lib/aws-lambda";
@@ -21,6 +26,7 @@ import * as nodeLambda from "aws-cdk-lib/aws-lambda-nodejs";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
+import * as sns from "aws-cdk-lib/aws-sns";
 import type { Construct } from "constructs";
 
 import {
@@ -29,12 +35,12 @@ import {
 } from "./config";
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
-const serviceEntry = path.resolve(dirname, "../../../apps/services/src/health.ts");
 const clientBffEntry = path.resolve(dirname, "../../../apps/services/src/client-bff.ts");
 const adminApiEntry = path.resolve(dirname, "../../../apps/services/src/admin-api.ts");
 const uploadPresignerEntry = path.resolve(dirname, "../../../apps/services/src/upload-presigner.ts");
 const publisherEntry = path.resolve(dirname, "../../../apps/services/src/publisher.ts");
 const artifactSignerEntry = path.resolve(dirname, "../../../apps/services/src/artifact-signer.ts");
+const auditExporterEntry = path.resolve(dirname, "../../../apps/services/src/audit-exporter.ts");
 
 type PortalStackProps = StackProps & PortalEnvironmentConfig;
 
@@ -76,6 +82,14 @@ export class PortalStack extends Stack {
     const adminAuthDomain = identity.adminDomain.baseUrl();
     const functions = this.createFunctions(resourcePrefix, tables, buckets, keys);
     const apis = this.createApis(resourcePrefix, functions, identity.adminUserPool, identity.adminClient);
+    const alarms = this.createOperationalSafeguards(
+      resourcePrefix,
+      tables,
+      buckets,
+      keys,
+      functions,
+      apis,
+    );
 
     functions.clientBff.addEnvironment("CLIENT_USER_POOL_ID", identity.clientUserPool.userPoolId);
     functions.clientBff.addEnvironment("CLIENT_APP_CLIENT_ID", identity.clientClient.userPoolClientId);
@@ -93,7 +107,6 @@ export class PortalStack extends Stack {
     identity.clientSecret.grantRead(functions.clientBff);
     keys.application.grantEncryptDecrypt(functions.clientBff);
     keys.application.grantEncryptDecrypt(functions.adminApi);
-    keys.application.grantDecrypt(functions.auditExporter);
 
     functions.adminApi.addEnvironment(
       "ADMIN_ISSUER",
@@ -132,6 +145,8 @@ export class PortalStack extends Stack {
     new CfnOutput(this, "AdminAuthDomain", { value: adminAuthDomain });
     new CfnOutput(this, "AdminCliCallbackUrl", { value: config.adminCliCallbackUrl });
     new CfnOutput(this, "AdminCliLogoutUrl", { value: config.adminCliLogoutUrl });
+    new CfnOutput(this, "OperationalAlarmTopicArn", { value: alarms.topicArn });
+    new CfnOutput(this, "AuditArchiveBucketName", { value: buckets.auditArchive.bucketName });
   }
 
   private createKeys(prefix: string): Keys {
@@ -240,7 +255,7 @@ export class PortalStack extends Stack {
       encryption: s3.BucketEncryption.KMS,
       encryptionKey: keys.auditArchive,
       objectLockEnabled: true,
-      objectLockDefaultRetention: s3.ObjectLockRetention.governance(Duration.days(365 * 3)),
+      objectLockDefaultRetention: s3.ObjectLockRetention.governance(Duration.days(184)),
     });
 
     return { upload, published, auditArchive };
@@ -347,7 +362,7 @@ export class PortalStack extends Stack {
     const createFunction = (
       id: string,
       serviceName: string,
-      options: { timeout?: Duration; memorySize?: number; entry?: string } = {},
+      options: { entry: string; timeout?: Duration; memorySize?: number },
     ) => {
       const logGroup = new logs.LogGroup(this, `${id}Logs`, {
         logGroupName: `/aws/lambda/${prefix}-${serviceName}`,
@@ -356,7 +371,7 @@ export class PortalStack extends Stack {
       });
       return new nodeLambda.NodejsFunction(this, id, {
         functionName: `${prefix}-${serviceName}`,
-        entry: options.entry ?? serviceEntry,
+        entry: options.entry,
         handler: "handler",
         runtime: lambda.Runtime.NODEJS_22_X,
         architecture: lambda.Architecture.ARM_64,
@@ -390,9 +405,12 @@ export class PortalStack extends Stack {
     uploadPresigner.addEnvironment("MAX_UPLOAD_BYTES", String(100 * 1024 * 1024));
     publisher.addEnvironment("MAX_UPLOAD_BYTES", String(100 * 1024 * 1024));
     const auditExporter = createFunction("AuditExporterFunction", "audit-exporter", {
+      entry: auditExporterEntry,
       timeout: Duration.minutes(15),
       memorySize: 512,
     });
+    auditExporter.addEnvironment("AUDIT_ARCHIVE_BUCKET_NAME", buckets.auditArchive.bucketName);
+    auditExporter.addEnvironment("MAX_AUDIT_EXPORT_BYTES", String(128 * 1024 * 1024));
 
     this.addDynamoPolicy(clientBff, [tables.identity, tables.tenantData], [
       "GetItem",
@@ -471,10 +489,284 @@ export class PortalStack extends Stack {
     keys.published.grantEncryptDecrypt(publisher);
 
     this.addDynamoPolicy(auditExporter, [tables.audit], ["DescribeTable", "Scan"]);
-    buckets.auditArchive.grantPut(auditExporter, "exports/*");
+    auditExporter.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["s3:PutObject"],
+        resources: [buckets.auditArchive.arnForObjects("exports/*")],
+      }),
+    );
     keys.auditArchive.grantEncrypt(auditExporter);
 
     return { clientBff, adminApi, artifactSigner, uploadPresigner, publisher, auditExporter };
+  }
+
+  private createOperationalSafeguards(
+    prefix: string,
+    tables: Tables,
+    buckets: Buckets,
+    keys: Keys,
+    functions: {
+      clientBff: nodeLambda.NodejsFunction;
+      adminApi: nodeLambda.NodejsFunction;
+      artifactSigner: nodeLambda.NodejsFunction;
+      uploadPresigner: nodeLambda.NodejsFunction;
+      publisher: nodeLambda.NodejsFunction;
+      auditExporter: nodeLambda.NodejsFunction;
+    },
+    apis: { client: apigwv2.HttpApi; admin: apigwv2.HttpApi },
+  ): sns.Topic {
+    const alarmTopic = new sns.Topic(this, "OperationalAlarmTopic", {
+      topicName: `${prefix}-operational-alarms`,
+      displayName: `BDR portal ${prefix} alarms`,
+      enforceSSL: true,
+    });
+    alarmTopic.applyRemovalPolicy(RemovalPolicy.RETAIN_ON_UPDATE_OR_DELETE);
+    const alarmAction = new cloudwatchActions.SnsAction(alarmTopic);
+
+    const alarm = (
+      id: string,
+      metric: cloudwatch.IMetric,
+      description: string,
+    ): cloudwatch.Alarm => {
+      const result = new cloudwatch.Alarm(this, id, {
+        alarmName: `${prefix}-${id}`,
+        alarmDescription: description,
+        metric,
+        threshold: 1,
+        evaluationPeriods: 1,
+        datapointsToAlarm: 1,
+        comparisonOperator:
+          cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+      result.addAlarmAction(alarmAction);
+      return result;
+    };
+
+    const sum = (label: string, metrics: readonly cloudwatch.IMetric[]) => {
+      const usingMetrics = Object.fromEntries(
+        metrics.map((metric, index) => [`m${index}`, metric]),
+      );
+      return new cloudwatch.MathExpression({
+        expression: Object.keys(usingMetrics).join(" + "),
+        usingMetrics,
+        label,
+        period: Duration.minutes(5),
+      });
+    };
+
+    alarm(
+      "ApplicationLambdaErrors",
+      sum("Application Lambda errors", [
+        functions.clientBff.metricErrors(),
+        functions.adminApi.metricErrors(),
+        functions.artifactSigner.metricErrors(),
+        functions.uploadPresigner.metricErrors(),
+      ]),
+      "A synchronous portal Lambda failed outside its normal HTTP error response path.",
+    );
+    alarm(
+      "PublisherErrors",
+      functions.publisher.metricErrors({ period: Duration.minutes(5), statistic: "Sum" }),
+      "A report publication copy or verification operation failed.",
+    );
+    alarm(
+      "AuditExporterErrors",
+      functions.auditExporter.metricErrors({ period: Duration.minutes(5), statistic: "Sum" }),
+      "The monthly immutable Audit-table export failed.",
+    );
+    alarm(
+      "LambdaThrottles",
+      sum(
+        "Lambda throttles",
+        Object.values(functions).map((fn) => fn.metricThrottles()),
+      ),
+      "One or more portal Lambda functions were throttled.",
+    );
+    alarm(
+      "ApiServerErrors",
+      sum("HTTP API 5xx responses", [
+        apis.client.metricServerError(),
+        apis.admin.metricServerError(),
+      ]),
+      "The Client BFF or Admin API returned a server error, including failed transactional audit writes.",
+    );
+    for (const [tableName, table] of Object.entries(tables)) {
+      alarm(
+        `Dynamo${tableName[0]!.toUpperCase()}${tableName.slice(1)}Throttles`,
+        sum(`${tableName} DynamoDB throttle events`, [
+          new cloudwatch.Metric({
+            namespace: "AWS/DynamoDB",
+            metricName: "ReadThrottleEvents",
+            dimensionsMap: { TableName: table.tableName },
+            statistic: "Sum",
+            period: Duration.minutes(5),
+          }),
+          new cloudwatch.Metric({
+            namespace: "AWS/DynamoDB",
+            metricName: "WriteThrottleEvents",
+            dimensionsMap: { TableName: table.tableName },
+            statistic: "Sum",
+            period: Duration.minutes(5),
+          }),
+        ]),
+        `The ${tableName} DynamoDB table was throttled.`,
+      );
+    }
+
+    const exportSchedule = new events.Rule(this, "MonthlyAuditExportSchedule", {
+      ruleName: `${prefix}-monthly-audit-export`,
+      description: "Exports the append-only Audit table on the first day of each month at 06:00 UTC",
+      schedule: events.Schedule.cron({ minute: "0", hour: "6", day: "1" }),
+      targets: [
+        new eventTargets.LambdaFunction(functions.auditExporter, {
+          retryAttempts: 2,
+          maxEventAge: Duration.hours(2),
+        }),
+      ],
+    });
+    alarm(
+      "AuditExportDeliveryFailures",
+      new cloudwatch.Metric({
+        namespace: "AWS/Events",
+        metricName: "FailedInvocations",
+        dimensionsMap: { RuleName: exportSchedule.ruleName },
+        statistic: "Sum",
+        period: Duration.minutes(5),
+      }),
+      "EventBridge could not deliver a scheduled audit export invocation.",
+    );
+
+    const cloudTrailLogGroup = new logs.LogGroup(this, "SecurityActivityTrailLogs", {
+      logGroupName: `/aws/cloudtrail/${prefix}-security-activity`,
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: RemovalPolicy.RETAIN_ON_UPDATE_OR_DELETE,
+    });
+    const trailName = `${prefix}-security-activity`;
+    const trailArn = this.formatArn({
+      service: "cloudtrail",
+      resource: "trail",
+      resourceName: trailName,
+    });
+    const cloudTrailPrincipal = new iam.ServicePrincipal("cloudtrail.amazonaws.com");
+    keys.auditArchive.addToResourcePolicy(
+      new iam.PolicyStatement({
+        sid: "AllowCloudTrailEncryptLogs",
+        principals: [cloudTrailPrincipal],
+        actions: ["kms:GenerateDataKey*"],
+        resources: ["*"],
+        conditions: {
+          StringEquals: { "aws:SourceArn": trailArn },
+          StringLike: {
+            "kms:EncryptionContext:aws:cloudtrail:arn": this.formatArn({
+              service: "cloudtrail",
+              region: "*",
+              resource: "trail",
+              resourceName: "*",
+            }),
+          },
+        },
+      }),
+    );
+    keys.auditArchive.addToResourcePolicy(
+      new iam.PolicyStatement({
+        sid: "AllowCloudTrailDescribeKey",
+        principals: [cloudTrailPrincipal],
+        actions: ["kms:DescribeKey"],
+        resources: ["*"],
+        conditions: { StringEquals: { "aws:SourceArn": trailArn } },
+      }),
+    );
+    const trail = new cloudtrail.Trail(this, "SecurityActivityTrail", {
+      trailName,
+      // CDK's TrailProps still models this through the legacy IBucket shape,
+      // whose optional isWebsite property conflicts with exactOptionalPropertyTypes.
+      bucket: buckets.auditArchive as unknown as NonNullable<
+        cloudtrail.TrailProps["bucket"]
+      >,
+      s3KeyPrefix: "cloudtrail",
+      encryptionKey: keys.auditArchive,
+      enableFileValidation: true,
+      sendToCloudWatchLogs: true,
+      cloudWatchLogGroup: cloudTrailLogGroup,
+      managementEvents: cloudtrail.ReadWriteType.NONE,
+      includeGlobalServiceEvents: false,
+      isMultiRegionTrail: false,
+    });
+    // Register a selector with the L2 so its validation recognizes this as a
+    // data-only trail. The L1 override below replaces it with the narrower
+    // advanced selectors that CDK's Trail L2 does not currently expose.
+    trail.addEventSelector(
+      cloudtrail.DataResourceType.S3_OBJECT,
+      [buckets.published.arnForObjects("versions/")],
+      {
+        readWriteType: cloudtrail.ReadWriteType.WRITE_ONLY,
+        includeManagementEvents: false,
+      },
+    );
+    const cfnTrail = trail.node.defaultChild as cloudtrail.CfnTrail;
+    cfnTrail.eventSelectors = undefined;
+    cfnTrail.advancedEventSelectors = [
+      {
+        name: "Published report writes and deletes",
+        fieldSelectors: [
+          { field: "eventCategory", equalTo: ["Data"] },
+          { field: "resources.type", equalTo: ["AWS::S3::Object"] },
+          {
+            field: "resources.ARN",
+            startsWith: [buckets.published.arnForObjects("versions/")],
+          },
+          { field: "readOnly", equalTo: ["false"] },
+        ],
+      },
+      {
+        name: "Audit table writes",
+        fieldSelectors: [
+          { field: "eventCategory", equalTo: ["Data"] },
+          { field: "resources.type", equalTo: ["AWS::DynamoDB::Table"] },
+          { field: "resources.ARN", equalTo: [tables.audit.tableArn] },
+          { field: "readOnly", equalTo: ["false"] },
+        ],
+      },
+    ];
+
+    const forbiddenAuditMutationMetric = new logs.MetricFilter(
+      this,
+      "ForbiddenAuditMutationMetric",
+      {
+        logGroup: cloudTrailLogGroup,
+        filterPattern: logs.FilterPattern.all(
+          logs.FilterPattern.stringValue(
+            "$.eventSource",
+            "=",
+            "dynamodb.amazonaws.com",
+          ),
+          logs.FilterPattern.stringValue(
+            "$.resources[*].ARN",
+            "=",
+            tables.audit.tableArn,
+          ),
+          logs.FilterPattern.any(
+            logs.FilterPattern.stringValue("$.eventName", "=", "UpdateItem"),
+            logs.FilterPattern.stringValue("$.eventName", "=", "DeleteItem"),
+            logs.FilterPattern.stringValue("$.eventName", "=", "BatchWriteItem"),
+          ),
+        ),
+        metricNamespace: "BDR/ClientPortal",
+        metricName: "ForbiddenAuditMutationAttempts",
+        metricValue: "1",
+      },
+    );
+    alarm(
+      "ForbiddenAuditMutations",
+      forbiddenAuditMutationMetric.metric({
+        statistic: "Sum",
+        period: Duration.minutes(5),
+      }),
+      "An identity attempted to update, delete, or batch-write the append-only Audit table.",
+    );
+
+    return alarmTopic;
   }
 
   private addDynamoPolicy(

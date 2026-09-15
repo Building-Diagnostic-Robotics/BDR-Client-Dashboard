@@ -241,7 +241,68 @@ describe("portal infrastructure", () => {
     expect(clientUpdateResourcesJson).toContain("AdminControlTable");
     expect(JSON.stringify(adminPolicy?.Properties?.PolicyDocument)).toContain("kms:Decrypt");
     expect(JSON.stringify(adminPolicy?.Properties?.PolicyDocument)).toContain("kms:GenerateDataKey*");
-    expect(JSON.stringify(auditExporterPolicy?.Properties?.PolicyDocument)).toContain("kms:Decrypt");
+    const auditExporterPolicyJson = JSON.stringify(
+      auditExporterPolicy?.Properties?.PolicyDocument,
+    );
+    expect(auditExporterPolicyJson).toContain("dynamodb:Scan");
+    expect(auditExporterPolicyJson).toContain("s3:PutObject");
+    expect(auditExporterPolicyJson).toContain("kms:Encrypt");
+    expect(auditExporterPolicyJson).not.toContain("kms:Decrypt");
+  });
+
+  it("schedules locked audit exports and monitors security operations", () => {
+    const rendered = template();
+    const auditArchiveKey = Object.values(
+      rendered.findResources("AWS::KMS::Key"),
+    ).find((resource) =>
+      JSON.stringify(resource.Properties?.KeyPolicy).includes(
+        '"Service":"cloudtrail.amazonaws.com"',
+      ),
+    );
+    const auditArchiveKeyPolicy = JSON.stringify(
+      auditArchiveKey?.Properties?.KeyPolicy,
+    );
+    expect(auditArchiveKeyPolicy).toContain("kms:GenerateDataKey*");
+    expect(auditArchiveKeyPolicy).toContain("kms:DescribeKey");
+    expect(auditArchiveKeyPolicy).toContain("aws:SourceArn");
+    expect(auditArchiveKeyPolicy).toContain(
+      "kms:EncryptionContext:aws:cloudtrail:arn",
+    );
+    rendered.hasResourceProperties("AWS::Lambda::Function", {
+      FunctionName: "bdr-portal-development-audit-exporter",
+      Environment: {
+        Variables: Match.objectLike({
+          AUDIT_ARCHIVE_BUCKET_NAME: Match.anyValue(),
+          AUDIT_TABLE_NAME: Match.anyValue(),
+          MAX_AUDIT_EXPORT_BYTES: String(128 * 1024 * 1024),
+        }),
+      },
+    });
+    rendered.hasResourceProperties("AWS::Events::Rule", {
+      Name: "bdr-portal-development-monthly-audit-export",
+      ScheduleExpression: "cron(0 6 1 * ? *)",
+      State: "ENABLED",
+    });
+    rendered.hasResourceProperties(
+      "AWS::CloudTrail::Trail",
+      Match.objectLike({
+        EnableLogFileValidation: true,
+        IsLogging: true,
+        AdvancedEventSelectors: Match.arrayWith([
+          Match.objectLike({ Name: "Published report writes and deletes" }),
+          Match.objectLike({ Name: "Audit table writes" }),
+        ]),
+      }),
+    );
+    rendered.hasResourceProperties("AWS::Logs::MetricFilter", {
+      MetricTransformations: [
+        Match.objectLike({ MetricName: "ForbiddenAuditMutationAttempts" }),
+      ],
+    });
+    rendered.resourceCountIs("AWS::SNS::Topic", 1);
+    expect(
+      Object.keys(rendered.findResources("AWS::CloudWatch::Alarm")).length,
+    ).toBeGreaterThanOrEqual(8);
   });
 
   it("allows only the exact portal origin to make PDF range requests", () => {

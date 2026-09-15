@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { normalizeEmail } from "./invitations";
 import {
+  auditExpiresAt,
   auditKeys,
   identityKeys,
   publishedArtifactKey,
@@ -77,6 +78,19 @@ describe("DynamoDB key schema", () => {
     expect(publishedArtifactKey(ids.reportVersion)).toBe(
       `versions/${ids.reportVersion}.pdf`,
     );
+    expect(auditExpiresAt("2026-09-13T14:00:00.000Z")).toBe(
+      Date.parse("2027-03-13T14:00:00.000Z") / 1000,
+    );
+  });
+
+  it("clamps six-month audit retention to the end of shorter months", () => {
+    expect(auditExpiresAt("2026-08-31T14:00:00.000Z")).toBe(
+      Date.parse("2027-02-28T14:00:00.000Z") / 1000,
+    );
+  });
+
+  it("rejects an invalid audit timestamp", () => {
+    expect(() => auditExpiresAt("not-a-date")).toThrow(/valid timestamp/);
   });
 
   it("rejects delimiters that could forge parentage", () => {
