@@ -17,15 +17,10 @@ describe("publisher", () => {
 
   it("uses a conditional destination write and verifies its exact S3 version", async () => {
     const checksum = Buffer.from("a".repeat(64), "hex").toString("base64");
-    let headCount = 0;
+    const commands: string[] = [];
     const send = vi.spyOn(S3Client.prototype, "send").mockImplementation(async (command) => {
+      commands.push(command.constructor.name);
       if (command instanceof HeadObjectCommand) {
-        headCount += 1;
-        if (headCount === 1) {
-          const error = new Error("missing");
-          error.name = "NotFound";
-          throw error;
-        }
         return { VersionId: "published-version", ContentLength: 1024, ContentType: "application/pdf", ChecksumSHA256: checksum } as never;
       }
       if (command instanceof GetObjectCommand) return { Body: {} } as never;
@@ -50,5 +45,37 @@ describe("publisher", () => {
       IfNoneMatch: "*",
       ChecksumSHA256: checksum,
     });
+    expect(commands).toEqual(["GetObjectCommand", "PutObjectCommand", "HeadObjectCommand"]);
+  });
+
+  it("verifies the existing immutable destination after a conditional-write conflict", async () => {
+    const checksum = Buffer.from("a".repeat(64), "hex").toString("base64");
+    const send = vi.spyOn(S3Client.prototype, "send").mockImplementation(async (command) => {
+      if (command instanceof GetObjectCommand) return { Body: {} } as never;
+      if (command instanceof PutObjectCommand) {
+        const error = new Error("destination exists");
+        error.name = "PreconditionFailed";
+        throw error;
+      }
+      if (command instanceof HeadObjectCommand) {
+        return { VersionId: "published-version", ContentLength: 1024, ContentType: "application/pdf", ChecksumSHA256: checksum } as never;
+      }
+      throw new Error("Unexpected S3 command");
+    });
+
+    await expect(handler({
+      action: "COPY_AND_VERIFY",
+      uploadKey: "uploads/upload_1234567890123456/source.pdf",
+      sourceVersionId: "source-version",
+      publishedKey: "versions/reportversion_1234567890123456.pdf",
+      sizeBytes: 1024,
+      sha256: "a".repeat(64),
+    })).resolves.toMatchObject({ versionId: "published-version", sizeBytes: 1024 });
+
+    expect(send.mock.calls.map(([command]) => command.constructor.name)).toEqual([
+      "GetObjectCommand",
+      "PutObjectCommand",
+      "HeadObjectCommand",
+    ]);
   });
 });

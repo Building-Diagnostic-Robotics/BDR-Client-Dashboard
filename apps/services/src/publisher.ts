@@ -70,11 +70,6 @@ export async function handler(request: Request) {
 
   const sourceKey = uploadKey(request.uploadKey);
   const destinationKey = publishedKey(request.publishedKey);
-  try {
-    return await verifyDestination(publishedBucket, destinationKey, undefined, request);
-  } catch (error) {
-    if (!missing(error)) throw error;
-  }
   const source = await s3.send(new GetObjectCommand({
     Bucket: uploadBucket,
     Key: sourceKey,
