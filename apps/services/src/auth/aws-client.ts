@@ -21,7 +21,7 @@ import {
   type Organization,
   type OAuthLoginTransaction,
 } from "@bdr/contracts";
-import { adminControlKeys, auditKeys, identityKeys, sessionKeys, sha256, tenantKeys, type ConsistentRead, type DynamoKey } from "@bdr/domain";
+import { adminControlKeys, auditExpiresAt, auditKeys, identityKeys, sessionKeys, sha256, tenantKeys, type ConsistentRead, type DynamoKey } from "@bdr/domain";
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 
 import type {
@@ -335,7 +335,7 @@ export class DynamoClientAuthStore implements ClientAuthStore {
       {
         Put: {
           TableName: this.config.auditTableName,
-          Item: { ...auditKeys.organization(input.identity.organizationId, input.acceptedAt, eventId), eventId, organizationId: input.identity.organizationId, occurredAt: input.acceptedAt, action: "INVITATION_ACCEPTED", actorId: input.identity.userId, actorSub: input.identity.sub, requestId: input.requestId, target: { userId: input.identity.userId, invitationId: input.invitation.invitationId } },
+          Item: { ...auditKeys.organization(input.identity.organizationId, input.acceptedAt, eventId), eventId, organizationId: input.identity.organizationId, occurredAt: input.acceptedAt, ttlExpiresAt: auditExpiresAt(input.acceptedAt), action: "INVITATION_ACCEPTED", actorId: input.identity.userId, actorSub: input.identity.sub, requestId: input.requestId, target: { userId: input.identity.userId, invitationId: input.invitation.invitationId } },
           ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)",
         },
       },
@@ -448,6 +448,7 @@ export class DynamoClientAuthStore implements ClientAuthStore {
                 eventId,
                 organizationId: input.identity.organizationId,
                 occurredAt: input.now,
+                ttlExpiresAt: auditExpiresAt(input.now),
                 action: "CLIENT_LOGIN",
                 actorId: input.identity.userId,
                 actorSub: input.identity.sub,
@@ -547,6 +548,7 @@ export class DynamoClientAuthStore implements ClientAuthStore {
                 ...auditKeys.system(input.revokedAt, eventId),
                 eventId,
                 occurredAt: input.revokedAt,
+                ttlExpiresAt: auditExpiresAt(input.revokedAt),
                 action: "CLIENT_LOGOUT",
                 actorId: input.session.sub,
                 actorSub: input.session.sub,

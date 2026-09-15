@@ -179,6 +179,21 @@ export const auditKeys = {
   },
 };
 
+export function auditExpiresAt(occurredAt: string): number {
+  const occurred = new Date(occurredAt);
+  if (Number.isNaN(occurred.getTime())) {
+    throw new TypeError("occurredAt must be a valid timestamp");
+  }
+  const dayOfMonth = occurred.getUTCDate();
+  occurred.setUTCDate(1);
+  occurred.setUTCMonth(occurred.getUTCMonth() + 6);
+  const lastDayOfTargetMonth = new Date(
+    Date.UTC(occurred.getUTCFullYear(), occurred.getUTCMonth() + 1, 0),
+  ).getUTCDate();
+  occurred.setUTCDate(Math.min(dayOfMonth, lastDayOfTargetMonth));
+  return Math.ceil(occurred.getTime() / 1000);
+}
+
 export function publishedArtifactKey(artifactVersionId: string): string {
   return `versions/${segment(artifactVersionId, "artifactVersionId")}.pdf`;
 }

@@ -56,6 +56,9 @@ describe("transaction plans", () => {
     });
     expect(plan[2]).toMatchObject({
       table: "AUDIT",
+      item: {
+        ttlExpiresAt: Date.parse("2027-03-13T14:00:00.000Z") / 1000,
+      },
       conditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)",
     });
   });

@@ -36,6 +36,7 @@ import {
 } from "@bdr/contracts";
 import {
   adminControlKeys,
+  auditExpiresAt,
   auditKeys,
   conflict,
   identityKeys,
@@ -136,6 +137,7 @@ function auditItem(context: ActionContext, organizationId: string | undefined, a
         eventId,
         organizationId,
         occurredAt,
+        ttlExpiresAt: auditExpiresAt(occurredAt),
         action,
         actorId: context.active.profile.adminId,
         actorSub: context.active.identity.sub,

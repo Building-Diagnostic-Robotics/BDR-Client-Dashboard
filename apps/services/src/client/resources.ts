@@ -26,7 +26,7 @@ import {
   type ReportType,
   type ReportVersion,
 } from "@bdr/contracts";
-import { auditKeys, ClientVisibilityPolicy, type AuthorizedArtifact, type ClientContext, type ClientVisibilityRepository, type ConsistentRead, type DynamoKey } from "@bdr/domain";
+import { auditExpiresAt, auditKeys, ClientVisibilityPolicy, type AuthorizedArtifact, type ClientContext, type ClientVisibilityRepository, type ConsistentRead, type DynamoKey } from "@bdr/domain";
 
 import { DynamoClientAuthStore, type ClientRuntimeConfig } from "../auth/aws-client";
 
@@ -162,7 +162,7 @@ export class ClientResourceService {
     const access = clientResponse(artifactAccessResponseSchema, signed);
     const occurredAt = new Date().toISOString();
     const eventId = `event_${randomUUID()}`;
-    await this.dynamo.send(new PutCommand({ TableName: this.config.auditTableName, Item: { ...auditKeys.organization(context.organization.organizationId, occurredAt, eventId), eventId, organizationId: context.organization.organizationId, occurredAt, action, actorId: context.userId, actorSub: context.sub, requestId, target }, ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)" }));
+    await this.dynamo.send(new PutCommand({ TableName: this.config.auditTableName, Item: { ...auditKeys.organization(context.organization.organizationId, occurredAt, eventId), eventId, organizationId: context.organization.organizationId, occurredAt, ttlExpiresAt: auditExpiresAt(occurredAt), action, actorId: context.userId, actorSub: context.sub, requestId, target }, ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)" }));
     return access;
   }
 }

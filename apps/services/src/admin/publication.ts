@@ -22,7 +22,7 @@ import {
   type UploadSession,
   type UploadTarget,
 } from "@bdr/contracts";
-import { auditKeys, conflict, DomainError, invalidState, notFound, publishedArtifactKey, tenantKeys } from "@bdr/domain";
+import { auditExpiresAt, auditKeys, conflict, DomainError, invalidState, notFound, publishedArtifactKey, tenantKeys } from "@bdr/domain";
 import { z } from "zod";
 
 import type { ActiveAdmin } from "../auth/admin";
@@ -413,7 +413,7 @@ export class AwsPublicationOperations implements PublicationOperations {
   private audit(context: Context, organizationId: string, action: string, target: Record<string, string>, details?: Record<string, unknown>) {
     const occurredAt = new Date().toISOString();
     const eventId = `event_${randomUUID()}`;
-    return { Put: { TableName: this.config.auditTableName, Item: { ...auditKeys.organization(organizationId, occurredAt, eventId), eventId, organizationId, occurredAt, action, actorId: context.active.profile.adminId, actorSub: context.active.identity.sub, requestId: context.requestId, target, details }, ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)" } };
+    return { Put: { TableName: this.config.auditTableName, Item: { ...auditKeys.organization(organizationId, occurredAt, eventId), eventId, organizationId, occurredAt, ttlExpiresAt: auditExpiresAt(occurredAt), action, actorId: context.active.profile.adminId, actorSub: context.active.identity.sub, requestId: context.requestId, target, details }, ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)" } };
   }
 
   private async transact(actions: object[]) {
