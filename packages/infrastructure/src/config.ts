@@ -21,11 +21,13 @@ function origin(value: string, label: string, environment: DeploymentEnvironment
   return parsed.origin;
 }
 
-function redirectUrl(value: string, label: string, environment: DeploymentEnvironment): string {
+function redirectUrl(value: string, label: string): string {
   const parsed = new URL(value);
   const isLocal = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
-  if (parsed.protocol !== "https:" && !(environment === "development" && isLocal)) {
-    throw new TypeError(`${label} must use HTTPS outside local development`);
+  // CLI OAuth redirects terminate on the operator's loopback HTTP listener,
+  // including when that CLI authenticates against production.
+  if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && isLocal)) {
+    throw new TypeError(`${label} must use HTTPS or loopback HTTP`);
   }
   if (parsed.search || parsed.hash) {
     throw new TypeError(`${label} cannot contain query parameters or a fragment`);
@@ -49,12 +51,10 @@ export function validatePortalEnvironmentConfig(
     adminCliCallbackUrl: redirectUrl(
       config.adminCliCallbackUrl,
       "adminCliCallbackUrl",
-      config.deploymentEnvironment,
     ),
     adminCliLogoutUrl: redirectUrl(
       config.adminCliLogoutUrl,
       "adminCliLogoutUrl",
-      config.deploymentEnvironment,
     ),
     clientAuthDomainPrefix: domainPrefix(
       config.clientAuthDomainPrefix,
