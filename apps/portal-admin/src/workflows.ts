@@ -106,6 +106,14 @@ async function uploadStatus(client: PortalAdminClient, target: UploadTarget, upl
   }));
 }
 
+async function workflowStep<T>(label: string, action: () => Promise<T>): Promise<T> {
+  try {
+    return await action();
+  } catch (error) {
+    throw new Error(`${label}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 export async function publishInspection(client: PortalAdminClient, args: string[]) {
   const values = parseOptions(args);
   const organizationId = required(values, "organization");
@@ -158,14 +166,23 @@ export async function publishReport(client: PortalAdminClient, args: string[]) {
 export async function publishHowToRead(client: PortalAdminClient, args: string[], replace: boolean) {
   const values = parseOptions(args);
   const organizationId = required(values, "organization");
-  const [organization, document] = await Promise.all([
-    client.execute({ method: "GET", path: `/admin/organizations/${organizationId}` }),
-    client.execute({ method: "GET", path: `/admin/organizations/${organizationId}/documents/how-to-read` }),
-  ]);
+  const organization = await workflowStep("How to Read organization lookup failed", () =>
+    client.execute({ method: "GET", path: `/admin/organizations/${organizationId}` }));
+  const document = await workflowStep("How to Read metadata lookup failed", () =>
+    client.execute({ method: "GET", path: `/admin/organizations/${organizationId}/documents/how-to-read` }));
   const uploadSessionId = required(values, "upload-session");
   const target: UploadTarget = { kind: "ORGANIZATION_DOCUMENT", organizationId, documentType: "HOW_TO_READ" };
-  const upload = await uploadStatus(client, target, uploadSessionId);
-  process.stderr.write(`${JSON.stringify({ organization, document, sourceFilename: upload.originalFilename, uploadState: upload.state, operation: replace ? "replacement" : "first publication" }, null, 2)}\n`);
+  const upload = await workflowStep("How to Read upload-session lookup failed", () =>
+    uploadStatus(client, target, uploadSessionId));
+  process.stderr.write(`${JSON.stringify({
+    organization,
+    document,
+    uploadSessionId,
+    sourceFilename: upload.originalFilename,
+    uploadState: upload.state,
+    operation: replace ? "replacement" : "first publication",
+  }, null, 2)}\n`);
   await confirmPublication(null);
-  return client.execute({ method: "POST", path: `/admin/organizations/${organizationId}/documents/how-to-read/${replace ? "replace" : "publish"}`, body: { uploadSessionId, expectedRevision: (document as { revision?: string }).revision, approvalConfirmed: true, approvalStatementVersion: "bdr-approval-v1" } });
+  return workflowStep("How to Read publication failed", () =>
+    client.execute({ method: "POST", path: `/admin/organizations/${organizationId}/documents/how-to-read/${replace ? "replace" : "publish"}`, body: { uploadSessionId, expectedRevision: (document as { revision?: string }).revision, approvalConfirmed: true, approvalStatementVersion: "bdr-approval-v1" } }));
 }
