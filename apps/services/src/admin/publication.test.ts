@@ -12,6 +12,43 @@ const artifactVersionId = "reportversion_0123456789abcdef";
 const adminId = "admin_0123456789abcdef";
 
 describe("Phase 6 publication", () => {
+  it("loads an organization-document upload when target properties arrive in a different order", async () => {
+    const documentUploadSessionId = "upload_abcdef0123456789";
+    const documentVersionId = "documentversion_abcdef0123456789";
+    const session = {
+      uploadSessionId: documentUploadSessionId,
+      target: { kind: "ORGANIZATION_DOCUMENT", organizationId, documentType: "HOW_TO_READ" },
+      state: "READY",
+      uploadKey: `uploads/${documentUploadSessionId}/source.pdf`,
+      originalFilename: "how-to-read.pdf",
+      declaredSizeBytes: 1024,
+      declaredSha256: "b".repeat(64),
+      contentType: "application/pdf",
+      sourceS3VersionId: "source-version",
+      artifactVersionId: documentVersionId,
+      publishedKey: `versions/${documentVersionId}.pdf`,
+      destinationS3VersionId: null,
+      createdAt: "2026-09-13T14:00:00.000Z",
+      absoluteExpiresAt: "2026-09-20T14:00:00.000Z",
+      ttlExpiresAt: 1,
+      createdByAdminId: adminId,
+      revision: "rev_upload_abcdef01",
+      failureReason: null,
+    };
+    const dynamoSend = vi.fn(async (command: unknown) => {
+      if (command instanceof GetCommand) return { Item: session };
+      throw new Error("Unexpected DynamoDB command");
+    });
+    const service = new AwsPublicationOperations(
+      { tenantDataTableName: "tenant", auditTableName: "audit", uploadPresignerFunctionName: "presigner", publisherFunctionName: "publisher", maxUploadBytes: 100 * 1024 * 1024 },
+      { dynamo: { send: dynamoSend } as never },
+    );
+
+    await expect(service.getUploadSession(organizationId, documentUploadSessionId, {
+      target: { documentType: "HOW_TO_READ", organizationId, kind: "ORGANIZATION_DOCUMENT" },
+    })).resolves.toMatchObject({ uploadSessionId: documentUploadSessionId, state: "READY" });
+  });
+
   it("copies and verifies the PDF before committing the visible report version", async () => {
     const sequence: string[] = [];
     let transaction: Array<Record<string, unknown>> = [];

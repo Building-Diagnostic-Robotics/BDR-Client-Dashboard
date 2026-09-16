@@ -62,6 +62,19 @@ const versionedDocument = organizationDocumentSchema.extend({ revision: z.string
 function revision() { return `rev_${randomUUID()}`; }
 function id(prefix: string, scope: string, key: string) { return `${prefix}_${createHash("sha256").update(`${prefix}\0${scope}\0${key}`).digest("hex").slice(0, 32)}`; }
 
+function sameUploadTarget(left: UploadTarget, right: UploadTarget): boolean {
+  if (left.kind !== right.kind || left.organizationId !== right.organizationId) return false;
+  if (left.kind === "ORGANIZATION_DOCUMENT" && right.kind === "ORGANIZATION_DOCUMENT") {
+    return left.documentType === right.documentType;
+  }
+  if (left.kind === "INSPECTION_REPORT" && right.kind === "INSPECTION_REPORT") {
+    return left.projectId === right.projectId
+      && left.inspectionId === right.inspectionId
+      && left.reportType === right.reportType;
+  }
+  return false;
+}
+
 export class AwsPublicationOperations implements PublicationOperations {
   private readonly dynamo: DynamoDBDocumentClient;
   private readonly lambda: LambdaClient;
@@ -290,7 +303,7 @@ export class AwsPublicationOperations implements PublicationOperations {
   }
 
   private async existingUploadResponse(session: UploadSession, request: CreateUploadSessionRequest, originalFilename: string) {
-    if (session.declaredSizeBytes !== request.sizeBytes || session.declaredSha256 !== request.sha256 || session.originalFilename !== originalFilename || JSON.stringify(session.target) !== JSON.stringify(request.target)) conflict("Idempotency key was already used with different input");
+    if (session.declaredSizeBytes !== request.sizeBytes || session.declaredSha256 !== request.sha256 || session.originalFilename !== originalFilename || !sameUploadTarget(session.target, request.target)) conflict("Idempotency key was already used with different input");
     if (session.state !== "UPLOADING") return { uploadSession: session, uploadUrl: null, requiredHeaders: {} };
     if (Date.parse(session.absoluteExpiresAt) <= Date.now()) invalidState("Upload session has expired");
     return this.responseWithUrl(session);
@@ -366,7 +379,7 @@ export class AwsPublicationOperations implements PublicationOperations {
   private async loadSession(organizationId: string, uploadSessionId: string, target: UploadTarget) {
     if (target.organizationId !== organizationId) notFound();
     const session = await this.require(this.sessionKey(target, uploadSessionId), uploadSessionSchema);
-    if (session.uploadSessionId !== uploadSessionId || JSON.stringify(session.target) !== JSON.stringify(target)) notFound();
+    if (session.uploadSessionId !== uploadSessionId || !sameUploadTarget(session.target, target)) notFound();
     return session;
   }
 

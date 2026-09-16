@@ -28,5 +28,10 @@ pnpm-debug.log*
 .idea/
 .npmrc
 
+# Docs
+docs/runbooks/production-client-onboarding.md
+docs/runbooks/bootstrap-first-admin.md
+docs/runbooks/production-first-admin.md
+
 # Temp
 tmp/
