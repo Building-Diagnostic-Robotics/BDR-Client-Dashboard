@@ -54,7 +54,7 @@ function main() {
   const poolId = output("ClientUserPoolId");
   const clientId = output("ClientAppClientId");
   const cssPath = fileURLToPath(new URL("../branding/client-login.css", import.meta.url));
-  const logoPath = fileURLToPath(new URL("../../../apps/web/public/bdr_logo_name.png", import.meta.url));
+  const logoPath = fileURLToPath(new URL("../../../apps/web/public/bdr_logo_name_cropped.png", import.meta.url));
   const css = readFileSync(cssPath, "utf8");
   const logo = readFileSync(logoPath);
   if (Buffer.byteLength(css) > 3 * 1024 || logo.length > 100 * 1024) {
