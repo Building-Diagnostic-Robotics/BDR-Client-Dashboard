@@ -64,6 +64,9 @@ class FakeStore implements ClientAuthStore {
   async consumeLoginAndCreateSession(input: { session: ClientSession }) {
     this.consumed += 1;
     this.session = input.session;
+    if (this.login) {
+      this.login = { ...this.login, transaction: { ...this.login.transaction, consumedAt: now.toISOString() } };
+    }
   }
   async getClientSession() {
     return this.session;
@@ -193,6 +196,54 @@ describe("client BFF authentication", () => {
     expect(store.consumed).toBe(1);
   });
 
+  it.each(["missing_cookie", "mismatched_cookie", "missing_transaction", "expired_transaction", "consumed_transaction"])(
+    "rejects %s before exchanging a code or creating a session",
+    async (failure) => {
+      const { auth, store, oauth } = service();
+      const started = await auth.startLogin("/projects");
+      const exchange = vi.spyOn(oauth, "exchangeCode");
+      if (failure === "missing_transaction") store.login = null;
+      if (failure === "expired_transaction" && store.login) {
+        store.login.transaction = { ...store.login.transaction, absoluteExpiresAt: now.toISOString() };
+      }
+      if (failure === "consumed_transaction" && store.login) {
+        store.login.transaction = { ...store.login.transaction, consumedAt: now.toISOString() };
+      }
+      await expect(auth.finishLogin({
+        code: "code", state: started.state,
+        loginCookie: failure === "missing_cookie" ? undefined : failure === "mismatched_cookie" ? "wrong" : started.state,
+        requestId: "request",
+      })).rejects.toMatchObject({ code: "AUTHENTICATION_REQUIRED" });
+      expect(exchange).not.toHaveBeenCalled();
+      expect(store.consumed).toBe(0);
+      expect(store.session).toBeNull();
+    },
+  );
+
+  it("rejects a replayed successful login even if its original cookie is supplied", async () => {
+    const { auth, store, oauth } = service();
+    const started = await auth.startLogin("/projects");
+    const exchange = vi.spyOn(oauth, "exchangeCode");
+    const callback = { code: "code", state: started.state, loginCookie: started.state, requestId: "request" };
+    const established = await auth.finishLogin(callback);
+    await expect(auth.finishLogin(callback)).rejects.toMatchObject({ code: "AUTHENTICATION_REQUIRED" });
+    expect(exchange).toHaveBeenCalledOnce();
+    expect(store.consumed).toBe(1);
+    expect(store.session).toEqual(established.session);
+  });
+
+  it.each(["expired", "revoked"])("denies an %s dashboard session despite its browser cookie", async (failure) => {
+    const { auth, store, oauth } = service();
+    const started = await auth.startLogin("/projects");
+    const established = await auth.finishLogin({ code: "code", state: started.state, loginCookie: started.state, requestId: "request" });
+    store.session = {
+      ...established.session,
+      ...(failure === "expired" ? { absoluteExpiresAt: now.toISOString() } : { revokedAt: now.toISOString() }),
+    };
+    await expect(auth.authenticate(event(established.rawSessionId))).rejects.toMatchObject({ code: "AUTHENTICATION_REQUIRED" });
+    expect(oauth.refreshes).toBe(0);
+  });
+
   it("rechecks identity and organization before accepting or refreshing a session", async () => {
     const { auth, store, oauth } = service();
     const started = await auth.startLogin();
@@ -241,6 +292,7 @@ describe("client BFF authentication", () => {
     await expect(auth.logout(event(established.rawSessionId), "request")).resolves.toContain("/logout");
     expect(store.revoked).toBe(1);
     expect(oauth.revoked).toBe(1);
+    await expect(auth.authenticate(event(established.rawSessionId))).rejects.toMatchObject({ code: "AUTHENTICATION_REQUIRED" });
     expect(warning).toHaveBeenCalledWith(expect.stringContaining("cognito_refresh_token_revocation_failed"));
     warning.mockRestore();
   });

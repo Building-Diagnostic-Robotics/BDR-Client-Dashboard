@@ -38,3 +38,8 @@ docs/runbooks/audit-operations.md
 
 # Temp
 tmp/
+
+# Browser test artifacts can contain authentication material
+test-results/
+playwright-report/
+playwright/.auth/
