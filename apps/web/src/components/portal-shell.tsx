@@ -35,9 +35,11 @@ export function PortalShell({ children }: { children: ReactNode }) {
     async function load() {
       try {
         await getClient("/bff/auth/session", clientSessionResponseSchema);
+        if (!active) return;
         const response = await getClient("/bff/me", clientMeResponseSchema);
         if (active) setMe(response);
       } catch (reason) {
+        if (!active) return;
         if (reason instanceof ClientApiError && reason.status === 401) {
           window.location.replace(loginPath(currentReturnPath()));
           return;
@@ -45,8 +47,19 @@ export function PortalShell({ children }: { children: ReactNode }) {
         if (active) setError("We could not load your account. Please try again.");
       }
     }
+    function restore(event: PageTransitionEvent) {
+      if (!event.persisted) return;
+      setMe(null);
+      setError(null);
+      setLoggingOut(false);
+      void load();
+    }
+    window.addEventListener("pageshow", restore);
     void load();
-    return () => { active = false; };
+    return () => {
+      active = false;
+      window.removeEventListener("pageshow", restore);
+    };
   }, []);
 
   async function logout() {

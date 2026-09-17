@@ -25,6 +25,8 @@ npm run dev
 
 Run `npm run check` before submitting changes. It type-checks the workspaces, runs the contract tests, and creates a production build.
 
+Authentication regression tests and the separate local/live Chromium and WebKit suites are documented in [authentication-testing.md](./docs/runbooks/authentication-testing.md). Local browser tests use controlled BFF fixtures; live tests require dedicated development clients configured in the Git-ignored `.env.e2e.local` file.
+
 Synthesize the development AWS stack without deploying it:
 
 ```bash

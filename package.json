@@ -11,10 +11,17 @@
     "build": "npm run build --workspace @bdr/contracts && npm run build --workspace @bdr/domain && npm run build --workspace @bdr/services && npm run build --workspace @bdr/infrastructure && npm run build --workspace @bdr/web",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
+    "test:e2e": "PORTAL_E2E_MODE=local playwright test",
+    "test:e2e:live": "PORTAL_E2E_MODE=live node --env-file=.env.e2e.local node_modules/@playwright/test/cli.js test",
+    "test:e2e:production": "PORTAL_E2E_MODE=live PORTAL_E2E_ENVIRONMENT=production node --env-file=.env.e2e.local node_modules/@playwright/test/cli.js test",
+    "typecheck:e2e": "tsc --noEmit -p e2e/tsconfig.json",
     "synth": "npm run synth --workspace @bdr/infrastructure --",
     "check": "npm run typecheck && npm run test && npm run build"
   },
   "engines": {
     "node": ">=22"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
   }
 }

@@ -32,6 +32,14 @@ pnpm-debug.log*
 docs/runbooks/production-client-onboarding.md
 docs/runbooks/bootstrap-first-admin.md
 docs/runbooks/production-first-admin.md
+docs/runbooks/client-login-branding.md
+docs/runbooks/admin-break-glass.md
+docs/runbooks/audit-operations.md
 
 # Temp
 tmp/
+
+# Browser test artifacts can contain authentication material
+test-results/
+playwright-report/
+playwright/.auth/

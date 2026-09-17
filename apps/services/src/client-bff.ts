@@ -14,7 +14,7 @@ import {
   CLIENT_SESSION_COOKIE,
   assertMutationRequest,
 } from "./auth/primitives";
-import { clearCookie, json, redirect, requestId, secureCookie } from "./shared/http";
+import { JSON_HEADERS, clearCookie, json, redirect, requestId, secureCookie } from "./shared/http";
 import { ClientResourceService } from "./client/resources";
 
 const SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
@@ -51,6 +51,42 @@ const clearClientCookies = [
   clearCookie(CLIENT_LOGIN_COOKIE, true),
 ];
 
+function loginRetryResponse(event: APIGatewayProxyEventV2): APIGatewayProxyStructuredResultV2 {
+  return {
+    statusCode: 401,
+    headers: {
+      ...JSON_HEADERS,
+      "content-type": "text/html; charset=utf-8",
+      "x-request-id": requestId(event),
+      "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+    },
+    body: `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in again — BDR Inspections Dashboard</title>
+<style>body{margin:0;background:#f9fafb;color:#111827;font:16px/1.6 Arial,sans-serif}main{max-width:480px;margin:12vh auto;padding:32px;background:#fff;border:1px solid #e5e7eb;border-radius:12px}img{max-width:240px;width:100%;height:auto}h1{font-size:26px}a{display:inline-block;padding:12px 20px;background:#15803d;color:#fff;border-radius:6px;text-decoration:none}a:focus-visible{outline:3px solid #111827;outline-offset:3px}</style></head>
+<body><main><img src="/bdr_logo_name_cropped.png" alt="Building Diagnostic Robotics"><h1>Please sign in again</h1><p>This sign-in attempt could not be completed. It may have expired or already been used.</p><a href="/bff/auth/login?returnTo=%2Fprojects">Sign in again</a></main></body></html>`,
+  };
+}
+
+async function recoverLogin(
+  dependencies: Dependencies,
+  event: APIGatewayProxyEventV2,
+): Promise<APIGatewayProxyStructuredResultV2> {
+  try {
+    // The rejected callback grants nothing. Authenticate the existing session separately.
+    const active = await dependencies.service.authenticate(event);
+    return redirect("/projects", active.csrfToken
+      ? sessionCookies(active.rawSessionId, active.csrfToken)
+      : []);
+  } catch (error) {
+    if (error instanceof DomainError &&
+      (error.code === "AUTHENTICATION_REQUIRED" || error.code === "FORBIDDEN")) {
+      // Do not delete cookies that may belong to another tab's valid session/login attempt.
+      return loginRetryResponse(event);
+    }
+    throw error;
+  }
+}
+
 function errorResponse(
   error: unknown,
   event: APIGatewayProxyEventV2,
@@ -60,7 +96,10 @@ function errorResponse(
     return json(
       statusCode,
       { error: statusCode === 401 ? "authentication_required" : statusCode === 404 ? "not_found" : "access_denied" },
-      statusCode === 401 ? { cookies: clearClientCookies } : {},
+      {
+        headers: { "x-request-id": requestId(event) },
+        ...(statusCode === 401 ? { cookies: clearClientCookies } : {}),
+      },
     );
   }
   if (error instanceof ZodError) return json(400, { error: "invalid_request" });
@@ -92,14 +131,27 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
 
       if (method === "GET" && path === "/bff/auth/callback") {
         if (query(event, "error")) {
-          return json(401, { error: "authentication_required" }, { cookies: clearClientCookies });
+          console.warn(JSON.stringify({
+            requestId: requestId(event),
+            error: "client_login_rejected",
+            reason: "cognito_authorization_error",
+          }));
+          return await recoverLogin(dependencies, event);
         }
-        const established = await dependencies.service.finishLogin({
-          code: query(event, "code"),
-          state: query(event, "state"),
-          loginCookie: loginCookie(event),
-          requestId: requestId(event),
-        });
+        let established: Awaited<ReturnType<Dependencies["service"]["finishLogin"]>>;
+        try {
+          established = await dependencies.service.finishLogin({
+            code: query(event, "code"),
+            state: query(event, "state"),
+            loginCookie: loginCookie(event),
+            requestId: requestId(event),
+          });
+        } catch (error) {
+          if (error instanceof DomainError && error.code === "AUTHENTICATION_REQUIRED") {
+            return await recoverLogin(dependencies, event);
+          }
+          throw error;
+        }
         return redirect(established.returnTo, [
           ...sessionCookies(established.rawSessionId, established.csrfToken),
           clearCookie(CLIENT_LOGIN_COOKIE, true),

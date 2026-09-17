@@ -113,6 +113,15 @@ function ttl(absoluteExpiresAt: string): number {
   return Math.ceil(Date.parse(absoluteExpiresAt) / 1000);
 }
 
+function rejectLogin(requestId: string, reason: string): never {
+  console.warn(JSON.stringify({
+    requestId,
+    error: "client_login_rejected",
+    reason,
+  }));
+  authenticationRequired();
+}
+
 export class ClientAuthService {
   constructor(
     private readonly store: ClientAuthStore,
@@ -151,28 +160,29 @@ export class ClientAuthService {
     loginCookie: string | undefined;
     requestId: string;
   }): Promise<EstablishedClientSession> {
-    if (!input.code || !input.state || !equalSecrets(input.state, input.loginCookie)) {
-      authenticationRequired();
-    }
+    if (!input.code) rejectLogin(input.requestId, "authorization_code_missing");
+    if (!input.state) rejectLogin(input.requestId, "oauth_state_missing");
+    if (!input.loginCookie) rejectLogin(input.requestId, "login_cookie_missing");
+    if (!equalSecrets(input.state, input.loginCookie)) rejectLogin(input.requestId, "login_cookie_mismatch");
     const login = await this.store.getLogin(input.state);
     const now = this.now();
-    if (
-      !login ||
-      login.stateHash !== sha256(input.state) ||
-      login.consumedAt !== null ||
-      Date.parse(login.absoluteExpiresAt) <= now.getTime()
-    ) {
-      authenticationRequired();
-    }
+    if (!login) rejectLogin(input.requestId, "login_transaction_missing");
+    if (login.stateHash !== sha256(input.state)) rejectLogin(input.requestId, "login_transaction_state_mismatch");
+    if (login.consumedAt !== null) rejectLogin(input.requestId, "login_transaction_consumed");
+    if (Date.parse(login.absoluteExpiresAt) <= now.getTime()) rejectLogin(input.requestId, "login_transaction_expired");
     let tokens: ClientTokenSet;
     let verified: VerifiedClientTokens;
+    let tokenStage = "pkce_decryption";
     try {
       const verifier = await this.cipher.decrypt(login.pkceVerifierCiphertext);
+      tokenStage = "code_exchange";
       tokens = await this.oauth.exchangeCode(input.code, verifier);
+      tokenStage = "token_response_incomplete";
       if (!tokens.refreshToken || !tokens.idToken) authenticationRequired();
+      tokenStage = "token_verification";
       verified = await this.oauth.verifyInitial(tokens, login.nonce);
     } catch {
-      authenticationRequired();
+      rejectLogin(input.requestId, tokenStage);
     }
     let identity = await this.store.getClientIdentity(
       identityKeys.subject(verified.issuer, verified.sub),
