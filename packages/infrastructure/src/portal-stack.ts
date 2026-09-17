@@ -277,12 +277,28 @@ export class PortalStack extends Stack {
       signInAliases: { email: true },
       autoVerify: { email: true },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
+      userInvitation: {
+        emailSubject: "Your BDR Inspections Dashboard invitation",
+        emailBody: `
+<div style="font-family:Arial,sans-serif;color:#111827;line-height:1.6;max-width:560px;margin:0 auto;padding:24px">
+  <h1 style="font-size:24px;color:#15803d">BDR Inspections Dashboard</h1>
+  <p>Welcome to the BDR Inspections Dashboard.</p>
+  <p>Access your building inspection reports and supporting documents securely.</p>
+  <p><a href="${config.portalOrigin}/projects" style="display:inline-block;background-color:#16a34a;color:#ffffff;padding:12px 20px;text-decoration:none;font-weight:bold">Open your dashboard</a></p>
+  <p>Dashboard link: <a href="${config.portalOrigin}/projects">${config.portalOrigin}/projects</a></p>
+  <p><strong>Username:</strong> {username}<br><strong>Temporary password:</strong> {####}</p>
+  <p>Sign in with these credentials and choose a new password when prompted. Your temporary password expires after seven days. If it expires, contact your BDR representative for another invitation.</p>
+  <p>Please keep your credentials private.</p>
+  <p>The BDR Team</p>
+</div>`,
+      },
       passwordPolicy,
       deletionProtection: true,
       removalPolicy: RemovalPolicy.RETAIN_ON_UPDATE_OR_DELETE,
     });
     const clientDomain = clientUserPool.addDomain("ClientManagedLoginDomain", {
       cognitoDomain: { domainPrefix: config.clientAuthDomainPrefix },
+      managedLoginVersion: cognito.ManagedLoginVersion.CLASSIC_HOSTED_UI,
     });
     const clientClient = clientUserPool.addClient("ClientBffAppClient", {
       userPoolClientName: `${prefix}-client-bff`,

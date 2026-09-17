@@ -1,6 +1,6 @@
-# BDR Client Dashboard
+# BDR Inspections Dashboard
 
-BDR Client Dashboard is a secure web portal for Building Diagnostic Robotics clients. Customers will use it to view their buildings, review current and historical scans, and preview or download published inspection reports.
+BDR Inspections Dashboard is a secure web portal for Building Diagnostic Robotics clients. Customers will use it to view their buildings, review current and historical scans, and preview or download published inspection reports.
 
 The first release keeps the dashboard client-only. BDR staff will manage client organizations, users, projects, inspections, and report publication through a protected local CLI backed by the Portal Admin API. Administration pages inside the internal BDR ReportGen platform are planned for a later phase.
 
@@ -32,6 +32,8 @@ npm run synth -- --quiet
 ```
 
 Before an AWS deployment, provide globally unique Cognito domain prefixes and the real environment URLs as CDK context. Development and production must use separate values and separate stacks.
+
+Customer invitation copy is managed by CDK. After deploying, apply the BDR logo and colors to the customer Cognito login using the [client login branding runbook](./docs/runbooks/client-login-branding.md).
 
 ## Portal administration CLI
 
