@@ -61,7 +61,7 @@ export default function ProjectsPage() {
   return (
     <>
       <section className="page-heading">
-        <p className="eyebrow">Client portal</p>
+        <p className="eyebrow">BDR Inspections Dashboard</p>
         <h1>Your projects</h1>
         <p>Inspection reports and building information for {organization.displayName}.</p>
       </section>

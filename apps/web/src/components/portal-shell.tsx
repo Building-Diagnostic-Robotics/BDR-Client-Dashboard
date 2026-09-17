@@ -92,7 +92,7 @@ export function PortalShell({ children }: { children: ReactNode }) {
       <a className="skip-link" href="#main-content">Skip to content</a>
       <header className="site-header">
         <div className="site-header__inner">
-          <Link className="brand" href="/projects" aria-label="BDR client portal home">
+          <Link className="brand" href="/projects" aria-label="BDR Inspections Dashboard home">
             <Image src="/bdr_logo_name.png" alt="Building Diagnostic Robotics" width={132} height={76} priority />
           </Link>
           <nav className="site-nav" aria-label="Primary navigation">

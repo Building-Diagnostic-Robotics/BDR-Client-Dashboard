@@ -11,7 +11,7 @@ const inter = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "BDR Client Dashboard",
+  title: "BDR Inspections Dashboard",
   description: "Secure access to BDR building inspections and reports.",
   icons: "/BDR.jpg",
   referrer: "no-referrer",

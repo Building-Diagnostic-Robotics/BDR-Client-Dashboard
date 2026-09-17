@@ -1,4 +1,4 @@
-# BDR Client Dashboard Plan
+# BDR Inspections Dashboard Plan
 
 ## Purpose
 

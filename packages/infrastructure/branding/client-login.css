@@ -1,0 +1,49 @@
+.background-customizable {
+  background-color: #f9fafb;
+}
+.banner-customizable {
+  padding: 24px 24px 16px 24px;
+  background-color: #ffffff;
+}
+.logo-customizable {
+  max-width: 60%;
+  max-height: 100%;
+}
+.label-customizable {
+  font-weight: 600;
+  color: #111827;
+}
+.textDescription-customizable {
+  font-size: 16px;
+  color: #4b5563;
+}
+.inputField-customizable {
+  width: 100%;
+  height: 44px;
+  color: #111827;
+  background-color: #ffffff;
+  border: 1px solid #d1d5db;
+}
+.inputField-customizable:focus {
+  border-color: #16a34a;
+  outline: 2px;
+}
+.submitButton-customizable {
+  font-size: 16px;
+  font-weight: bold;
+  margin: 20px 0px 12px 0px;
+  width: 100%;
+  height: 44px;
+  color: #ffffff;
+  background-color: #16a34a;
+}
+.submitButton-customizable:hover {
+  color: #ffffff;
+  background-color: #15803d;
+}
+.errorMessage-customizable {
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #b91c1c;
+  font-size: 14px;
+}
