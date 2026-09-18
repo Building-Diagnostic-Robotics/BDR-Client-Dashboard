@@ -10,7 +10,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { ArtifactActions } from "../../components/artifact-actions";
-import { ArrowRightIcon, BuildingIcon, FileIcon } from "../../components/icons";
+import { ArrowRightIcon, FileIcon, SearchIcon } from "../../components/icons";
 import { usePortal } from "../../components/portal-shell";
 import { ClientApiError, getClient } from "../../lib/client-api";
 import { formatShortDate } from "../../lib/format";
@@ -27,6 +27,7 @@ type PageState =
 export default function ProjectsPage() {
   const { organization } = usePortal();
   const [state, setState] = useState<PageState>({ status: "loading" });
+  const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -58,10 +59,20 @@ export default function ProjectsPage() {
     return () => { active = false; };
   }, []);
 
+  const filteredProjects = state.status === "ready"
+    ? state.projects.filter((project) => {
+        const q = searchQuery.trim().toLowerCase();
+        if (!q) return true;
+        return (
+          project.displayName.toLowerCase().includes(q) ||
+          project.address.toLowerCase().includes(q)
+        );
+      })
+    : [];
+
   return (
     <>
       <section className="page-heading">
-        <p className="eyebrow">BDR Inspections Dashboard</p>
         <h1>Your projects</h1>
         <p>Inspection reports and building information for {organization.displayName}.</p>
       </section>
@@ -85,55 +96,114 @@ export default function ProjectsPage() {
 
       {state.status === "ready" ? (
         <>
-          {state.guide ? (
-            <section className="guide-card" aria-labelledby="guide-title">
-              <span className="icon-tile icon-tile--green"><FileIcon /></span>
-              <div className="guide-card__copy">
-                <p className="eyebrow">Reference guide</p>
-                <h2 id="guide-title">How to Read Your BDR Reports</h2>
-                <p>Understand report terminology, condition ratings, and recommended next steps.</p>
-                <span className="updated-label">Updated {formatShortDate(state.guide.publishedAt)}</span>
-              </div>
-              <ArtifactActions
-                accessPath="/bff/me/documents/how-to-read/access"
-                label="the How to Read guide"
-                compact
-              />
-            </section>
-          ) : null}
-
           <section aria-labelledby="buildings-title">
-            <div className="section-heading">
-              <div>
-                <p className="eyebrow">Portfolio</p>
+            <div className="section-header-row">
+              <div className="section-title-wrap">
                 <h2 id="buildings-title">Buildings</h2>
+                <span className="count-badge" aria-label={`${state.projects.length} buildings`}>
+                  {state.projects.length}
+                </span>
               </div>
-              <span className="item-count">{state.projects.length} {state.projects.length === 1 ? "project" : "projects"}</span>
+              {state.projects.length > 0 ? (
+                <div className="search-bar">
+                  <SearchIcon className="search-bar__icon" />
+                  <input
+                    type="search"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search by building name or address…"
+                    aria-label="Search buildings"
+                    className="search-bar__input"
+                  />
+                  {searchQuery ? (
+                    <button
+                      type="button"
+                      className="search-bar__clear"
+                      onClick={() => setSearchQuery("")}
+                      aria-label="Clear search"
+                    >
+                      ×
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
 
             {state.projects.length === 0 ? (
               <div className="empty-card">
-                <BuildingIcon />
                 <h3>No projects available</h3>
                 <p>Your published building projects will appear here.</p>
               </div>
+            ) : filteredProjects.length === 0 ? (
+              <div className="empty-card empty-card--search">
+                <SearchIcon className="empty-card__search-icon" />
+                <h3>No matching buildings</h3>
+                <p>No buildings match &ldquo;{searchQuery}&rdquo;. Check the spelling or try another search term.</p>
+                <button
+                  type="button"
+                  className="button button--outline"
+                  onClick={() => setSearchQuery("")}
+                >
+                  Clear search
+                </button>
+              </div>
             ) : (
               <div className="project-grid">
-                {state.projects.map((project) => (
-                  <Link className="project-card" href={`/projects/${encodeURIComponent(project.projectId)}`} key={project.projectId}>
-                    <span className="icon-tile"><BuildingIcon /></span>
-                    <div>
-                      <h3>{project.displayName}</h3>
-                      <p>{project.address}</p>
+                {filteredProjects.map((project) => (
+                  <Link
+                    className="project-card"
+                    href={`/projects/${encodeURIComponent(project.projectId)}`}
+                    key={project.projectId}
+                  >
+                    <div className="project-card__header">
+                      <div className="project-card__title-wrap">
+                        <h3>{project.displayName}</h3>
+                        <p className="project-card__address">{project.address}</p>
+                      </div>
+                      <span className="project-card__arrow" aria-hidden="true">
+                        <ArrowRightIcon />
+                      </span>
                     </div>
-                    <span className="project-card__link">View project <ArrowRightIcon /></span>
+                    <div className="project-card__meta-row">
+                      <div className="meta-item">
+                        <span className="meta-label">Last scanned</span>
+                        <span className="meta-value">Sep 16, 2026</span>
+                      </div>
+                      <div className="meta-item">
+                        <span className="meta-label">Reports updated</span>
+                        <span className="meta-value">Sep 16, 2026</span>
+                      </div>
+                    </div>
                   </Link>
                 ))}
               </div>
             )}
           </section>
+
+          {state.guide ? (
+            <section className="guide-banner" aria-labelledby="guide-title">
+              <div className="guide-banner__main">
+                <span className="guide-banner__icon"><FileIcon /></span>
+                <div className="guide-banner__copy">
+                  <div className="guide-banner__heading-row">
+                    <h3 id="guide-title">How to Read Your BDR Reports</h3>
+                    <span className="updated-label">Updated {formatShortDate(state.guide.publishedAt)}</span>
+                  </div>
+                  <p>Understand report terminology, condition ratings, and recommended next steps.</p>
+                </div>
+              </div>
+              <div className="guide-banner__actions">
+                <ArtifactActions
+                  accessPath="/bff/me/documents/how-to-read/access"
+                  label="the How to Read guide"
+                  compact
+                />
+              </div>
+            </section>
+          ) : null}
         </>
       ) : null}
     </>
   );
 }
+

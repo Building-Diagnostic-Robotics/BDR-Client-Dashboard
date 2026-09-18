@@ -37,3 +37,13 @@ export function FileIcon(props: IconProps) {
 export function LogoutIcon(props: IconProps) {
   return <svg {...common} {...props}><path d="M10 5H5v14h5M14 8l4 4-4 4M18 12H9" /></svg>;
 }
+
+export function SearchIcon(props: IconProps) {
+  return (
+    <svg {...common} {...props}>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m21 21-4.35-4.35" />
+    </svg>
+  );
+}
+
