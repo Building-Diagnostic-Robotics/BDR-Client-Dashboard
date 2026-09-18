@@ -4,14 +4,21 @@ import { clientMeResponseSchema, clientProjectListResponseSchema } from "@bdr/co
 const portalOrigin = () => new URL(process.env.PORTAL_E2E_BASE_URL!).origin;
 const authOrigin = () => new URL(process.env.PORTAL_E2E_AUTH_ORIGIN!).origin;
 
+// Classic Hosted UI duplicates IDs across hidden and visible responsive forms,
+// and its submit input has aria-label="submit" rather than "Sign in".
+const cognitoEmail = (page: Page) => page.locator('input[name="username"]:visible');
+const cognitoPassword = (page: Page) => page.locator('input[name="password"][type="password"]:visible');
+const cognitoSignIn = (page: Page) => page.locator('input[name="signInSubmitButton"][type="submit"]:visible');
+const cognitoRememberedSignIn = (page: Page) => page.getByRole("button", { name: /^sign in as /i });
+
 async function signIn(page: Page, other = false) {
   await page.goto("/projects");
   await expect.poll(() => new URL(page.url()).origin).toBe(authOrigin());
   const priorLoginUrl = page.url();
   // Verify the exact trusted Cognito origin before entering credentials.
-  await page.getByRole("textbox", { name: /email/i }).fill(process.env[other ? "PORTAL_E2E_OTHER_EMAIL" : "PORTAL_E2E_CLIENT_EMAIL"]!);
-  await page.getByLabel("Password", { exact: true }).fill(process.env[other ? "PORTAL_E2E_OTHER_PASSWORD" : "PORTAL_E2E_CLIENT_PASSWORD"]!);
-  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await cognitoEmail(page).fill(process.env[other ? "PORTAL_E2E_OTHER_EMAIL" : "PORTAL_E2E_CLIENT_EMAIL"]!);
+  await cognitoPassword(page).fill(process.env[other ? "PORTAL_E2E_OTHER_PASSWORD" : "PORTAL_E2E_CLIENT_PASSWORD"]!);
+  await cognitoSignIn(page).click();
   await expect(page.getByRole("heading", { name: "Your projects", exact: true })).toBeVisible();
   expect(new URL(page.url()).origin).toBe(portalOrigin());
   const expectedOrganization = process.env[other ? "PORTAL_E2E_OTHER_ORGANIZATION" : "PORTAL_E2E_CLIENT_ORGANIZATION"]?.trim();
@@ -59,8 +66,8 @@ test("Back to the remembered Cognito login preserves the current dashboard sessi
   await page.goBack();
   // Some engines replace redirect history. Reopening that same page reproduces the stale flow.
   if (new URL(page.url()).origin !== authOrigin()) await page.goto(previousLogin);
-  await expect(page.getByRole("button", { name: /^sign in as /i })).toBeVisible();
-  await page.getByRole("button", { name: /^sign in as /i }).click();
+  await expect(cognitoRememberedSignIn(page)).toBeVisible();
+  await cognitoRememberedSignIn(page).click();
   await expect(page.getByRole("heading", { name: "Your projects", exact: true })).toBeVisible();
   expect(await me(page)).toEqual(before);
 });
@@ -88,7 +95,7 @@ test("logout revokes the session and Back cannot restore authenticated access", 
   expect((await page.request.get("/bff/me")).status()).toBe(401);
   await page.goto("/projects");
   await expect.poll(() => new URL(page.url()).origin).toBe(authOrigin());
-  await expect(page.getByRole("textbox", { name: /email/i })).toBeVisible();
+  await expect(cognitoEmail(page)).toBeVisible();
 });
 
 test("logout in one tab denies access from a second tab", async ({ page, context }) => {
