@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  artifactAccessResponseSchema,
   clientInspectionListResponseSchema,
   clientProjectSchema,
   clientReportListResponseSchema,
@@ -14,8 +15,8 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { ArtifactActions } from "../../../components/artifact-actions";
-import { ArrowRightIcon } from "../../../components/icons";
-import { ClientApiError, getClient } from "../../../lib/client-api";
+import { ArrowRightIcon, ChevronDownIcon, DownloadIcon } from "../../../components/icons";
+import { ClientApiError, getClient, loginPath, postClient } from "../../../lib/client-api";
 import { formatDate, formatReportUpdatedDate, formatScanTime } from "../../../lib/format";
 
 type InspectionWithReports = Readonly<{
@@ -62,12 +63,6 @@ const statusLabel: Record<ReportDeliveryStatus, string> = {
   NOT_APPLICABLE: "Not applicable",
 };
 
-const statusNote: Record<Exclude<ReportDeliveryStatus, "PUBLISHED">, string> = {
-  EXPECTED: "BDR is preparing this report.",
-  NOT_INCLUDED: "This report was not included for this inspection.",
-  NOT_APPLICABLE: "This report does not apply to this inspection.",
-};
-
 function ReportRow({
   report,
   projectId,
@@ -105,7 +100,7 @@ function ReportRow({
             compact
           />
         ) : (
-          <p className="report-row__note">{statusNote[report.deliveryStatus]}</p>
+          <span className="report-row__empty-action" aria-hidden="true">—</span>
         )}
       </div>
     </div>
@@ -121,36 +116,97 @@ function InspectionSection({
   projectId: string;
   latest: boolean;
 }) {
+  const [expanded, setExpanded] = useState(latest);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+
   const { inspection, reports } = value;
   const orderedReports = reports.slice().sort(
     (left, right) => reportOrder.indexOf(left.reportType) - reportOrder.indexOf(right.reportType),
   );
-  const available = reports.filter((report) => report.deliveryStatus === "PUBLISHED").length;
+  const publishedReports = orderedReports.filter((report) => report.deliveryStatus === "PUBLISHED");
+
+  async function handleDownloadAll() {
+    if (downloading || publishedReports.length === 0) return;
+    setDownloading(true);
+    setDownloadError(null);
+    try {
+      const accessList = await Promise.all(
+        publishedReports.map(async (report) => {
+          const path = `/bff/projects/${encodeURIComponent(projectId)}/inspections/${encodeURIComponent(inspection.inspectionId)}/reports/${report.reportType}/access`;
+          const access = await postClient(path, { disposition: "DOWNLOAD" }, artifactAccessResponseSchema);
+          return access.url;
+        }),
+      );
+      accessList.forEach((url, idx) => {
+        setTimeout(() => {
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = "";
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+        }, idx * 250);
+      });
+    } catch (reason) {
+      if (reason instanceof ClientApiError && reason.status === 401) {
+        window.location.replace(loginPath(window.location.pathname));
+        return;
+      }
+      setDownloadError("We could not download all reports. Please try individual downloads.");
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   return (
-    <section className={latest ? "inspection inspection--latest" : "inspection"}>
+    <section className={`inspection${latest ? " inspection--latest" : ""}${!expanded ? " inspection--collapsed" : ""}`}>
       <div className="inspection__header">
-        <div>
-          {latest ? (
-            <span className="latest-pill">Latest inspection</span>
-          ) : (
-            <span className="previous-pill">Previous inspection</span>
-          )}
+        <div className="inspection__header-info">
+          {latest ? <span className="latest-pill">Latest inspection</span> : null}
           <h2>{formatDate(inspection.scannedAt, inspection.scanTimeZone)}</h2>
           <p className="inspection__sub">Scanned at {formatScanTime(inspection.scannedAt, inspection.scanTimeZone)}</p>
         </div>
-        <span className="inspection__count">{available} of {reports.length} reports available</span>
+        <div className="inspection__header-actions">
+          <span className="inspection__count">{publishedReports.length} of {reports.length} reports available</span>
+          {publishedReports.length > 0 ? (
+            <button
+              type="button"
+              className="button button--outline button--sm"
+              onClick={handleDownloadAll}
+              disabled={downloading}
+              title="Download all available reports for this inspection"
+            >
+              <DownloadIcon />
+              {downloading ? "Downloading…" : "Download all"}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="toggle-button"
+            onClick={() => setExpanded((prev) => !prev)}
+            aria-expanded={expanded}
+            aria-label={expanded ? "Collapse inspection reports" : "Expand inspection reports"}
+            title={expanded ? "Collapse inspection" : "Expand inspection"}
+          >
+            <ChevronDownIcon className={expanded ? "chevron chevron--expanded" : "chevron"} />
+          </button>
+        </div>
+        {downloadError ? <p className="action-error" role="alert">{downloadError}</p> : null}
       </div>
-      <div className="report-list">
-        {orderedReports.map((report) => (
-          <ReportRow
-            key={report.reportType}
-            report={report}
-            projectId={projectId}
-            inspectionId={inspection.inspectionId}
-            timeZone={inspection.scanTimeZone}
-          />
-        ))}
-      </div>
+      {expanded ? (
+        <div className="report-list">
+          {orderedReports.map((report) => (
+            <ReportRow
+              key={report.reportType}
+              report={report}
+              projectId={projectId}
+              inspectionId={inspection.inspectionId}
+              timeZone={inspection.scanTimeZone}
+            />
+          ))}
+        </div>
+      ) : null}
     </section>
   );
 }
