@@ -90,7 +90,7 @@ export function PortalShell({ children }: { children: ReactNode }) {
   if (!me) {
     return (
       <main className="centered-state">
-        <Image src="/bdr_logo_name.png" alt="Building Diagnostic Robotics" width={170} height={98} priority />
+        <Image src="/bdr_cropped.png" alt="Building Diagnostic Robotics" width={140} height={56} priority />
         <h1>Dashboard unavailable</h1>
         <p>{error}</p>
         <button className="button button--primary" type="button" onClick={() => window.location.reload()}>
@@ -106,7 +106,7 @@ export function PortalShell({ children }: { children: ReactNode }) {
       <header className="site-header">
         <div className="site-header__inner">
           <Link className="brand" href="/projects" aria-label="BDR Inspections Dashboard home">
-            <Image src="/bdr_logo_name.png" alt="Building Diagnostic Robotics" width={132} height={76} priority />
+            <Image src="/bdr_cropped.png" alt="Building Diagnostic Robotics" width={90} height={36} priority />
           </Link>
           <nav className="site-nav" aria-label="Primary navigation">
             <Link href="/projects">Projects</Link>
