@@ -75,34 +75,43 @@ function ReportRow({
   timeZone: string;
 }) {
   const content = reportContent[report.reportType];
+  const isPublished = report.deliveryStatus === "PUBLISHED";
+
   return (
     <div className="report-row">
       <div className="report-row__info">
         <h3>{content.name}</h3>
         <p>{content.description}</p>
       </div>
-      <div className="report-row__status-col">
-        <span className={`status status--${report.deliveryStatus.toLowerCase().replaceAll("_", "-")}`}>
-          <span className="status__dot" aria-hidden="true" />
-          {statusLabel[report.deliveryStatus]}
-        </span>
-        {report.publishedAt ? (
-          <span className="report-row__date">
-            {formatReportUpdatedDate(report.publishedAt, timeZone)}
+      {isPublished ? (
+        <>
+          <div className="report-row__status-col">
+            <span className="status status--published">
+              <span className="status__dot" aria-hidden="true" />
+              {statusLabel.PUBLISHED}
+            </span>
+            {report.publishedAt ? (
+              <span className="report-row__date">
+                {formatReportUpdatedDate(report.publishedAt, timeZone)}
+              </span>
+            ) : null}
+          </div>
+          <div className="report-row__actions-col">
+            <ArtifactActions
+              accessPath={`/bff/projects/${encodeURIComponent(projectId)}/inspections/${encodeURIComponent(inspectionId)}/reports/${report.reportType}/access`}
+              label={content.name}
+              compact
+            />
+          </div>
+        </>
+      ) : (
+        <div className="report-row__status-col report-row__status-col--end">
+          <span className={`status status--${report.deliveryStatus.toLowerCase().replaceAll("_", "-")}`}>
+            <span className="status__dot" aria-hidden="true" />
+            {statusLabel[report.deliveryStatus]}
           </span>
-        ) : null}
-      </div>
-      <div className="report-row__actions-col">
-        {report.deliveryStatus === "PUBLISHED" ? (
-          <ArtifactActions
-            accessPath={`/bff/projects/${encodeURIComponent(projectId)}/inspections/${encodeURIComponent(inspectionId)}/reports/${report.reportType}/access`}
-            label={content.name}
-            compact
-          />
-        ) : (
-          <span className="report-row__empty-action" aria-hidden="true">—</span>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -165,10 +174,13 @@ function InspectionSection({
         <div className="inspection__header-info">
           {latest ? <span className="latest-pill">Latest inspection</span> : null}
           <h2>{formatDate(inspection.scannedAt, inspection.scanTimeZone)}</h2>
-          <p className="inspection__sub">Scanned at {formatScanTime(inspection.scannedAt, inspection.scanTimeZone)}</p>
+          <p className="inspection__sub">
+            Scanned at {formatScanTime(inspection.scannedAt, inspection.scanTimeZone)}
+            <span className="inspection__sub-separator" aria-hidden="true">&middot;</span>
+            {publishedReports.length} {publishedReports.length === 1 ? "report" : "reports"} available
+          </p>
         </div>
         <div className="inspection__header-actions">
-          <span className="inspection__count">{publishedReports.length} of {reports.length} reports available</span>
           {publishedReports.length > 0 ? (
             <button
               type="button"
