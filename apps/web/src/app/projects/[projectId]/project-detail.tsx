@@ -14,9 +14,9 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { ArtifactActions } from "../../../components/artifact-actions";
-import { ArrowRightIcon, BuildingIcon, FileIcon } from "../../../components/icons";
+import { ArrowRightIcon } from "../../../components/icons";
 import { ClientApiError, getClient } from "../../../lib/client-api";
-import { formatDate, formatScanTime, formatShortDate } from "../../../lib/format";
+import { formatDate, formatReportUpdatedDate, formatScanTime } from "../../../lib/format";
 
 type InspectionWithReports = Readonly<{
   inspection: ClientInspection;
@@ -68,7 +68,7 @@ const statusNote: Record<Exclude<ReportDeliveryStatus, "PUBLISHED">, string> = {
   NOT_APPLICABLE: "This report does not apply to this inspection.",
 };
 
-function ReportCard({
+function ReportRow({
   report,
   projectId,
   inspectionId,
@@ -81,30 +81,34 @@ function ReportCard({
 }) {
   const content = reportContent[report.reportType];
   return (
-    <article className="report-card">
-      <div className="report-card__heading">
-        <span className="icon-tile"><FileIcon /></span>
-        <div>
-          <h3>{content.name}</h3>
-          <p>{content.description}</p>
-        </div>
+    <div className="report-row">
+      <div className="report-row__info">
+        <h3>{content.name}</h3>
+        <p>{content.description}</p>
       </div>
-      <div className="report-card__meta">
+      <div className="report-row__status-col">
         <span className={`status status--${report.deliveryStatus.toLowerCase().replaceAll("_", "-")}`}>
           <span className="status__dot" aria-hidden="true" />
           {statusLabel[report.deliveryStatus]}
         </span>
-        {report.publishedAt ? <span>Updated {formatShortDate(report.publishedAt, timeZone)}</span> : null}
+        {report.publishedAt ? (
+          <span className="report-row__date">
+            {formatReportUpdatedDate(report.publishedAt, timeZone)}
+          </span>
+        ) : null}
       </div>
-      {report.deliveryStatus === "PUBLISHED" ? (
-        <ArtifactActions
-          accessPath={`/bff/projects/${encodeURIComponent(projectId)}/inspections/${encodeURIComponent(inspectionId)}/reports/${report.reportType}/access`}
-          label={content.name}
-        />
-      ) : (
-        <p className="report-card__note">{statusNote[report.deliveryStatus]}</p>
-      )}
-    </article>
+      <div className="report-row__actions-col">
+        {report.deliveryStatus === "PUBLISHED" ? (
+          <ArtifactActions
+            accessPath={`/bff/projects/${encodeURIComponent(projectId)}/inspections/${encodeURIComponent(inspectionId)}/reports/${report.reportType}/access`}
+            label={content.name}
+            compact
+          />
+        ) : (
+          <p className="report-row__note">{statusNote[report.deliveryStatus]}</p>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -124,17 +128,21 @@ function InspectionSection({
   const available = reports.filter((report) => report.deliveryStatus === "PUBLISHED").length;
   return (
     <section className={latest ? "inspection inspection--latest" : "inspection"}>
-      <div className="inspection__heading">
+      <div className="inspection__header">
         <div>
-          {latest ? <span className="latest-pill">Latest inspection</span> : <p className="eyebrow">Previous inspection</p>}
+          {latest ? (
+            <span className="latest-pill">Latest inspection</span>
+          ) : (
+            <span className="previous-pill">Previous inspection</span>
+          )}
           <h2>{formatDate(inspection.scannedAt, inspection.scanTimeZone)}</h2>
-          <p>Scanned at {formatScanTime(inspection.scannedAt, inspection.scanTimeZone)}</p>
+          <p className="inspection__sub">Scanned at {formatScanTime(inspection.scannedAt, inspection.scanTimeZone)}</p>
         </div>
-        <span className="item-count">{available} {available === 1 ? "report" : "reports"} available</span>
+        <span className="inspection__count">{available} of {reports.length} reports available</span>
       </div>
-      <div className="report-grid">
+      <div className="report-list">
         {orderedReports.map((report) => (
-          <ReportCard
+          <ReportRow
             key={report.reportType}
             report={report}
             projectId={projectId}
@@ -203,17 +211,14 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
     <>
       <Link className="back-link" href="/projects"><ArrowRightIcon /> Back to projects</Link>
       <section className="project-hero">
-        <span className="icon-tile icon-tile--green"><BuildingIcon /></span>
         <div>
-          <p className="eyebrow">Building project</p>
           <h1>{state.project.displayName}</h1>
-          <p>{state.project.address}</p>
+          <p className="project-hero__address">{state.project.address}</p>
         </div>
       </section>
 
       {state.inspections.length === 0 ? (
         <div className="empty-card">
-          <FileIcon />
           <h2>No published inspections</h2>
           <p>Published inspection reports will appear here.</p>
         </div>
@@ -232,3 +237,4 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
     </>
   );
 }
+
