@@ -17,7 +17,7 @@ async function mockAccount(page: Page) {
     else if (path === "/bff/me") await route.fulfill({ json: { organization: { displayName: state.organization } } });
     else if (path === "/bff/me/projects") await route.fulfill({ json: { items: [{
       projectId: "project_0123456789abcdef", displayName: state.building,
-      address: "Test Address", timeZone: "America/New_York", latestInspection: null,
+      address: "Test Address", timeZone: "America/New_York", latestInspection: null, latestReportUpdate: null,
     }] } });
     else await route.fulfill({ status: 404, json: { error: "not_found" } });
   });

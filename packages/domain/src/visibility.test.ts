@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type {
   ClientIdentity,
@@ -377,57 +377,101 @@ describe("central client visibility policy", () => {
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
-  it("latestInspectionSummaryForProject returns null for a project with no inspections", async () => {
+  it("projectVisibilitySummary returns empty values for a project with no inspections", async () => {
     const repository = new FixtureRepository();
     const policy = new ClientVisibilityPolicy(repository);
     const clientContext = await context(repository);
     repository.inspection = null;
     await expect(
-      policy.latestInspectionSummaryForProject(clientContext, repository.project!),
-    ).resolves.toBeNull();
+      policy.projectVisibilitySummary(clientContext, repository.project!),
+    ).resolves.toEqual({ latestInspection: null, latestReportUpdate: null });
   });
 
-  it("latestInspectionSummaryForProject returns null when all inspections are draft", async () => {
+  it("projectVisibilitySummary hides draft inspections and their reports", async () => {
     const repository = new FixtureRepository();
     const policy = new ClientVisibilityPolicy(repository);
     const clientContext = await context(repository);
     repository.inspection = { ...repository.inspection!, publicationStatus: "DRAFT" };
     await expect(
-      policy.latestInspectionSummaryForProject(clientContext, repository.project!),
-    ).resolves.toBeNull();
+      policy.projectVisibilitySummary(clientContext, repository.project!),
+    ).resolves.toEqual({ latestInspection: null, latestReportUpdate: null });
   });
 
-  it("latestInspectionSummaryForProject derives PUBLISHED status when at least one report is published", async () => {
+  it("projectVisibilitySummary includes the current published report timestamp", async () => {
     const repository = new FixtureRepository();
     const policy = new ClientVisibilityPolicy(repository);
     const clientContext = await context(repository);
     // report fixture has deliveryStatus: PUBLISHED
     await expect(
-      policy.latestInspectionSummaryForProject(clientContext, repository.project!),
+      policy.projectVisibilitySummary(clientContext, repository.project!),
     ).resolves.toEqual({
-      scannedAt: "2026-09-04T14:30:00.000Z",
-      scanTimeZone: "America/Chicago",
-      overallStatus: "PUBLISHED",
+      latestInspection: {
+        scannedAt: "2026-09-04T14:30:00.000Z",
+        scanTimeZone: "America/Chicago",
+        overallStatus: "PUBLISHED",
+      },
+      latestReportUpdate: {
+        publishedAt: "2026-09-07T15:00:00.000Z",
+        scanTimeZone: "America/Chicago",
+      },
     });
   });
 
-  it("latestInspectionSummaryForProject derives EXPECTED status when any report is EXPECTED", async () => {
+  it("uses the newest visible report even when the latest inspection has no published reports", async () => {
+    const repository = new FixtureRepository();
+    const policy = new ClientVisibilityPolicy(repository);
+    const clientContext = await context(repository);
+    const newestInspection = {
+      ...repository.inspection!,
+      inspectionId: "inspection_newest",
+      scannedAt: "2026-09-10T14:30:00.000Z",
+    };
+    const archivedInspection = {
+      ...repository.inspection!,
+      inspectionId: "inspection_archived",
+      scannedAt: "2026-09-12T14:30:00.000Z",
+      lifecycleStatus: "ARCHIVED" as const,
+    };
+    vi.spyOn(repository, "queryInspections").mockResolvedValue([
+      repository.inspection!, newestInspection, archivedInspection,
+    ]);
+    const reportQuery = vi.spyOn(repository, "queryReports").mockImplementation(async (_pk, _projectId, requestedInspectionId) =>
+      requestedInspectionId === inspectionId ? [repository.report!] : [],
+    );
+
+    await expect(policy.projectVisibilitySummary(clientContext, repository.project!)).resolves.toEqual({
+      latestInspection: {
+        scannedAt: newestInspection.scannedAt,
+        scanTimeZone: newestInspection.scanTimeZone,
+        overallStatus: "NONE",
+      },
+      latestReportUpdate: {
+        publishedAt: repository.reportVersion!.publishedAt,
+        scanTimeZone: repository.inspection!.scanTimeZone,
+      },
+    });
+    expect(reportQuery).not.toHaveBeenCalledWith(
+      expect.anything(), expect.anything(), archivedInspection.inspectionId, expect.anything(),
+    );
+  });
+
+  it("projectVisibilitySummary derives EXPECTED status without an update for unpublished reports", async () => {
     const repository = new FixtureRepository();
     const policy = new ClientVisibilityPolicy(repository);
     const clientContext = await context(repository);
     repository.report = { ...repository.report!, deliveryStatus: "EXPECTED", currentVersionId: null };
     await expect(
-      policy.latestInspectionSummaryForProject(clientContext, repository.project!),
-    ).resolves.toMatchObject({ overallStatus: "EXPECTED" });
+      policy.projectVisibilitySummary(clientContext, repository.project!),
+    ).resolves.toMatchObject({ latestInspection: { overallStatus: "EXPECTED" }, latestReportUpdate: null });
   });
 
-  it("latestInspectionSummaryForProject derives NONE when all reports are NOT_INCLUDED", async () => {
+  it("projectVisibilitySummary derives NONE when all reports are NOT_INCLUDED", async () => {
     const repository = new FixtureRepository();
     const policy = new ClientVisibilityPolicy(repository);
     const clientContext = await context(repository);
     repository.report = { ...repository.report!, deliveryStatus: "NOT_INCLUDED", currentVersionId: null };
     await expect(
-      policy.latestInspectionSummaryForProject(clientContext, repository.project!),
-    ).resolves.toMatchObject({ overallStatus: "NONE" });
+      policy.projectVisibilitySummary(clientContext, repository.project!),
+    ).resolves.toMatchObject({ latestInspection: { overallStatus: "NONE" }, latestReportUpdate: null });
   });
 });

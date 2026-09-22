@@ -13,7 +13,7 @@ import { ArtifactActions } from "../../components/artifact-actions";
 import { ArrowRightIcon, FileIcon, SearchIcon } from "../../components/icons";
 import { usePortal } from "../../components/portal-shell";
 import { ClientApiError, getClient } from "../../lib/client-api";
-import { formatShortDate } from "../../lib/format";
+import { formatReportUpdatedDate, formatShortDate } from "../../lib/format";
 
 type PageState =
   | { status: "loading" }
@@ -179,18 +179,15 @@ export default function ProjectsPage() {
                         </div>
                         <div className="meta-item">
                           <span className="meta-label">Reports:</span>
-                          {li?.overallStatus === "PUBLISHED" ? (
-                            <span className="status-pill status-pill--published">
-                              <span className="status-pill__dot" aria-hidden="true" />
-                              Available
-                            </span>
-                          ) : li?.overallStatus === "EXPECTED" ? (
-                            <span className="status-pill status-pill--expected">
-                              <span className="status-pill__dot" aria-hidden="true" />
-                              In preparation
+                          {project.latestReportUpdate ? (
+                            <span className="meta-value">
+                              {formatReportUpdatedDate(
+                                project.latestReportUpdate.publishedAt,
+                                project.latestReportUpdate.scanTimeZone,
+                              )}
                             </span>
                           ) : (
-                            <span className="meta-value meta-value--none">—</span>
+                            <span className="meta-value meta-value--none">No reports yet</span>
                           )}
                         </div>
                       </div>
