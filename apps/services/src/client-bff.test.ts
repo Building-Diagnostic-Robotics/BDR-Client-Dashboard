@@ -22,9 +22,10 @@ const session: ClientSession = {
   refreshTokenCiphertext: "encrypted-refresh",
   accessTokenExpiresAt: "2026-09-13T14:15:00.000Z",
   csrfTokenHash: sha256(csrf),
-  absoluteExpiresAt: "2026-09-20T14:00:00.000Z",
+  absoluteExpiresAt: "2026-09-13T22:00:00.000Z",
   ttlExpiresAt: 1,
   revokedAt: null,
+  lastActivityAt: "2026-09-13T14:00:00.000Z",
 };
 
 function event(method: string, rawPath: string, input: Partial<APIGatewayProxyEventV2> = {}) {

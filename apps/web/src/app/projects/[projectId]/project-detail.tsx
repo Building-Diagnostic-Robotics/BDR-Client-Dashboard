@@ -11,13 +11,14 @@ import {
   type ReportDeliveryStatus,
   type ReportType,
 } from "@bdr/contracts";
+import JSZip from "jszip";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { ArtifactActions } from "../../../components/artifact-actions";
 import { ArrowRightIcon, ChevronDownIcon, DownloadIcon } from "../../../components/icons";
 import { ClientApiError, getClient, loginPath, postClient } from "../../../lib/client-api";
-import { formatDate, formatReportUpdatedDate, formatScanTime } from "../../../lib/format";
+import { formatDate, formatReportUpdatedDate, formatScanTime, formatShortDate } from "../../../lib/format";
 
 type InspectionWithReports = Readonly<{
   inspection: ClientInspection;
@@ -119,14 +120,16 @@ function ReportRow({
 function InspectionSection({
   value,
   projectId,
+  projectName,
   latest,
 }: {
   value: InspectionWithReports;
   projectId: string;
+  projectName: string;
   latest: boolean;
 }) {
   const [expanded, setExpanded] = useState(latest);
-  const [downloading, setDownloading] = useState(false);
+  const [downloadStatus, setDownloadStatus] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
 
   const { inspection, reports } = value;
@@ -136,35 +139,61 @@ function InspectionSection({
   const publishedReports = orderedReports.filter((report) => report.deliveryStatus === "PUBLISHED");
 
   async function handleDownloadAll() {
-    if (downloading || publishedReports.length === 0) return;
-    setDownloading(true);
+    if (downloadStatus !== null || publishedReports.length === 0) return;
+    setDownloadStatus("Preparing…");
     setDownloadError(null);
     try {
-      const accessList = await Promise.all(
+      const accessItems = await Promise.all(
         publishedReports.map(async (report) => {
           const path = `/bff/projects/${encodeURIComponent(projectId)}/inspections/${encodeURIComponent(inspection.inspectionId)}/reports/${report.reportType}/access`;
           const access = await postClient(path, { disposition: "DOWNLOAD" }, artifactAccessResponseSchema);
-          return access.url;
+          return {
+            report,
+            url: access.url,
+            name: `${reportContent[report.reportType].name}.pdf`,
+          };
         }),
       );
-      accessList.forEach((url, idx) => {
-        setTimeout(() => {
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = "";
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-        }, idx * 250);
+
+      const zip = new JSZip();
+      for (let i = 0; i < accessItems.length; i++) {
+        const item = accessItems[i]!;
+        setDownloadStatus(`Downloading (${i + 1}/${accessItems.length})…`);
+        const response = await fetch(item.url);
+        if (!response.ok) {
+          throw new Error(`Failed to fetch ${item.name}`);
+        }
+        const blob = await response.blob();
+        zip.file(item.name, blob);
+      }
+
+      setDownloadStatus("Creating ZIP…");
+      const zipBlob = await zip.generateAsync({
+        type: "blob",
+        compression: "DEFLATE",
+        compressionOptions: { level: 6 },
       });
+
+      const safeProjectName = (projectName || "Reports").replace(/[\\/:*?"<>|]/g, "-").trim();
+      const safeDate = formatShortDate(inspection.scannedAt, inspection.scanTimeZone).replace(/[\\/:*?"<>|]/g, "-");
+      const filename = `${safeProjectName} - Inspection ${safeDate}.zip`;
+
+      const downloadUrl = URL.createObjectURL(zipBlob);
+      const a = document.createElement("a");
+      a.href = downloadUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(downloadUrl), 60000);
     } catch (reason) {
       if (reason instanceof ClientApiError && reason.status === 401) {
         window.location.replace(loginPath(window.location.pathname));
         return;
       }
-      setDownloadError("We could not download all reports. Please try individual downloads.");
+      setDownloadError("We could not bundle all reports. Please try downloading reports individually.");
     } finally {
-      setDownloading(false);
+      setDownloadStatus(null);
     }
   }
 
@@ -186,11 +215,11 @@ function InspectionSection({
               type="button"
               className="button button--outline button--sm"
               onClick={handleDownloadAll}
-              disabled={downloading}
-              title="Download all available reports for this inspection"
+              disabled={downloadStatus !== null}
+              title="Download all available reports for this inspection as a ZIP file"
             >
               <DownloadIcon />
-              {downloading ? "Downloading…" : "Download all"}
+              {downloadStatus ?? "Download all (.zip)"}
             </button>
           ) : null}
           <button
@@ -297,6 +326,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
               key={inspection.inspection.inspectionId}
               value={inspection}
               projectId={state.project.projectId}
+              projectName={state.project.displayName}
               latest={index === 0}
             />
           ))}

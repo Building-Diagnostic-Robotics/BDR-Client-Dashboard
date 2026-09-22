@@ -180,6 +180,7 @@ describe("transaction plans", () => {
       absoluteExpiresAt: "2026-09-20T14:00:00.000Z",
       ttlExpiresAt: 1,
       revokedAt: null,
+      lastActivityAt: "2026-09-13T14:00:00.000Z",
     };
     const plan = buildClientSessionTransaction({ rawSessionId, session });
     expect(plan.map(({ kind }) => kind)).toEqual(["PUT", "PUT"]);

@@ -149,8 +149,8 @@ export default function ProjectsPage() {
               </div>
             ) : (
               <div className="project-grid">
-                {filteredProjects.map((project, index) => {
-                  const isInPreparation = index === 3;
+                {filteredProjects.map((project) => {
+                  const li = project.latestInspection;
                   return (
                     <Link
                       className="project-card"
@@ -171,17 +171,26 @@ export default function ProjectsPage() {
                       <div className="project-card__footer">
                         <div className="meta-item">
                           <span className="meta-label">Last scanned:</span>
-                          <span className="meta-value">Sep 16, 2026</span>
+                          {li ? (
+                            <span className="meta-value">{formatShortDate(li.scannedAt, li.scanTimeZone)}</span>
+                          ) : (
+                            <span className="meta-value meta-value--none">No scans yet</span>
+                          )}
                         </div>
                         <div className="meta-item">
-                          <span className="meta-label">Reports updated:</span>
-                          {isInPreparation ? (
+                          <span className="meta-label">Reports:</span>
+                          {li?.overallStatus === "PUBLISHED" ? (
+                            <span className="status-pill status-pill--published">
+                              <span className="status-pill__dot" aria-hidden="true" />
+                              Available
+                            </span>
+                          ) : li?.overallStatus === "EXPECTED" ? (
                             <span className="status-pill status-pill--expected">
                               <span className="status-pill__dot" aria-hidden="true" />
                               In preparation
                             </span>
                           ) : (
-                            <span className="meta-value">Sep 16, 2026</span>
+                            <span className="meta-value meta-value--none">—</span>
                           )}
                         </div>
                       </div>

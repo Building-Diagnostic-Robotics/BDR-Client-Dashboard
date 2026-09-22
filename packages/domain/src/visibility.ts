@@ -79,6 +79,12 @@ export type VisibleReportMetadata = Readonly<{
   publishedAt: string | null;
 }>;
 
+export type LatestInspectionSummary = Readonly<{
+  scannedAt: string;
+  scanTimeZone: string;
+  overallStatus: "PUBLISHED" | "EXPECTED" | "NONE";
+}>;
+
 const consistentRead = { consistentRead: true } as const;
 
 export type ActiveClientAuthentication = Readonly<{
@@ -292,6 +298,71 @@ export class ClientVisibilityPolicy {
       (project) =>
         project.organizationId === organizationId && project.lifecycleStatus === "ACTIVE",
     );
+  }
+
+  /**
+   * Returns the scan date and rolled-up report status for the most recent
+   * published inspection of `projectId`, or null if none exists.
+   *
+   * overallStatus derivation (evaluated only on ACTIVE, PUBLISHED inspections):
+   *   PUBLISHED – ≥1 report is PUBLISHED, none EXPECTED
+   *   EXPECTED  – ≥1 report is EXPECTED (PUBLISHED may also be present)
+   *   NONE      – all reports are NOT_INCLUDED or NOT_APPLICABLE
+   */
+  async latestInspectionSummaryForProject(
+    context: ClientContext,
+    project: Project,
+  ): Promise<LatestInspectionSummary | null> {
+    const organizationId = context.organization.organizationId;
+    const organizationPk = tenantKeys.organization(organizationId).PK;
+    const inspections = await this.repository.queryInspections(
+      organizationPk,
+      project.projectId,
+      consistentRead,
+    );
+    const visible = inspections
+      .filter(
+        (i) =>
+          i.organizationId === organizationId &&
+          i.projectId === project.projectId &&
+          i.lifecycleStatus === "ACTIVE" &&
+          i.publicationStatus === "PUBLISHED",
+      )
+      .slice()
+      .sort((a, b) => Date.parse(b.scannedAt) - Date.parse(a.scannedAt));
+
+    const latest = visible[0];
+    if (!latest) return null;
+
+    const reports = await this.repository.queryReports(
+      organizationPk,
+      project.projectId,
+      latest.inspectionId,
+      consistentRead,
+    );
+    const validReports = reports.filter(
+      (r) =>
+        r.organizationId === organizationId &&
+        r.projectId === project.projectId &&
+        r.inspectionId === latest.inspectionId,
+    );
+
+    let overallStatus: LatestInspectionSummary["overallStatus"] = "NONE";
+    for (const report of validReports) {
+      if (report.deliveryStatus === "EXPECTED") {
+        overallStatus = "EXPECTED";
+        break;
+      }
+      if (report.deliveryStatus === "PUBLISHED") {
+        overallStatus = "PUBLISHED";
+      }
+    }
+
+    return {
+      scannedAt: latest.scannedAt,
+      scanTimeZone: latest.scanTimeZone,
+      overallStatus,
+    };
   }
 
   async listVisibleInspections(

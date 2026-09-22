@@ -30,6 +30,7 @@ const clientSession: ClientSession = {
   absoluteExpiresAt: "2026-09-13T15:00:00.000Z",
   ttlExpiresAt: 1,
   revokedAt: null,
+  lastActivityAt: "2026-09-13T14:00:00.000Z",
 };
 
 describe("session authorization", () => {
@@ -38,6 +39,27 @@ describe("session authorization", () => {
     expect(() =>
       assertActiveClientSession(
         { ...clientSession, absoluteExpiresAt: "2026-09-13T13:59:59.000Z", ttlExpiresAt: 9_999_999_999 },
+        rawSessionId,
+        now,
+      ),
+    ).toThrowError(DomainError);
+  });
+
+  it("enforces a 30-minute inactivity timeout", () => {
+    // Active within 30 minutes: authorized (29 minutes later)
+    const twentyNineMinutesLater = new Date("2026-09-13T14:29:00.000Z");
+    expect(() => assertActiveClientSession(clientSession, rawSessionId, twentyNineMinutesLater)).not.toThrow();
+
+    // Idle for more than 30 minutes: rejected
+    const thirtyOneMinutesLater = new Date("2026-09-13T14:31:00.000Z");
+    expect(() =>
+      assertActiveClientSession(clientSession, rawSessionId, thirtyOneMinutesLater),
+    ).toThrowError(DomainError);
+
+    // Invalid activity timestamp: rejected
+    expect(() =>
+      assertActiveClientSession(
+        { ...clientSession, lastActivityAt: "invalid-date" },
         rawSessionId,
         now,
       ),

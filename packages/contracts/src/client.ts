@@ -17,11 +17,23 @@ export const clientMeResponseSchema = z.object({
   }).strict(),
 }).strict();
 
+export const clientProjectInspectionSummarySchema = z.object({
+  scannedAt: z.iso.datetime({ offset: true }),
+  scanTimeZone: ianaTimeZoneSchema,
+  /** Rolled-up delivery status across all reports in this inspection:
+   *  PUBLISHED = at least one PUBLISHED, none EXPECTED
+   *  EXPECTED  = at least one EXPECTED (some may be NOT_INCLUDED/NOT_APPLICABLE)
+   *  NONE      = no PUBLISHED or EXPECTED reports (all NOT_INCLUDED / NOT_APPLICABLE)
+   */
+  overallStatus: z.enum(["PUBLISHED", "EXPECTED", "NONE"]),
+}).strict();
+
 export const clientProjectSchema = z.object({
   projectId: opaqueIdSchema,
   displayName: z.string().trim().min(1).max(200),
   address: z.string().trim().min(1).max(500),
   timeZone: ianaTimeZoneSchema,
+  latestInspection: clientProjectInspectionSummarySchema.nullable(),
 }).strict();
 
 export const clientProjectListResponseSchema = z.object({
@@ -64,6 +76,7 @@ export const clientLogoutResponseSchema = z.object({
 
 export type ClientSessionResponse = z.infer<typeof clientSessionResponseSchema>;
 export type ClientMeResponse = z.infer<typeof clientMeResponseSchema>;
+export type ClientProjectInspectionSummary = z.infer<typeof clientProjectInspectionSummarySchema>;
 export type ClientProject = z.infer<typeof clientProjectSchema>;
 export type ClientProjectListResponse = z.infer<typeof clientProjectListResponseSchema>;
 export type ClientInspection = z.infer<typeof clientInspectionSchema>;

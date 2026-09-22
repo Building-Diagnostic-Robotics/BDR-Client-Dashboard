@@ -9,7 +9,7 @@ const contentSecurityPolicy = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data:",
   "font-src 'self' data:",
-  `connect-src 'self'${isDevelopment ? " ws:" : ""}`,
+  `connect-src 'self' https://*.s3.amazonaws.com https://*.s3.*.amazonaws.com${isDevelopment ? " ws:" : ""}`,
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",
