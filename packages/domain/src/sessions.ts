@@ -15,7 +15,7 @@ function isExpired(absoluteExpiresAt: string, now: Date): boolean {
 }
 
 /** 30 minutes: maximum allowed idle time between authenticated requests. */
-const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000;
+export const CLIENT_INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000;
 
 export function assertActiveClientSession(
   session: ClientSession | null,
@@ -32,7 +32,7 @@ export function assertActiveClientSession(
   }
   // Inactivity timeout: reject if the session has been idle longer than 30 minutes.
   const lastActivity = Date.parse(session.lastActivityAt);
-  if (!Number.isFinite(lastActivity) || now.getTime() - lastActivity > INACTIVITY_TIMEOUT_MS) {
+  if (!Number.isFinite(lastActivity) || now.getTime() - lastActivity > CLIENT_INACTIVITY_TIMEOUT_MS) {
     authenticationRequired();
   }
 }

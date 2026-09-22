@@ -22,7 +22,7 @@ import {
   type Organization,
   type OAuthLoginTransaction,
 } from "@bdr/contracts";
-import { adminControlKeys, auditExpiresAt, auditKeys, identityKeys, sessionKeys, sha256, tenantKeys, type ConsistentRead, type DynamoKey } from "@bdr/domain";
+import { CLIENT_INACTIVITY_TIMEOUT_MS, adminControlKeys, auditExpiresAt, auditKeys, identityKeys, sessionKeys, sha256, tenantKeys, type ConsistentRead, type DynamoKey } from "@bdr/domain";
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 
 import type {
@@ -476,7 +476,15 @@ export class DynamoClientAuthStore implements ClientAuthStore {
         ConsistentRead: true,
       }),
     );
-    return result.Item ? clientSessionSchema.parse(result.Item) : null;
+    if (!result.Item) return null;
+    const parsed = clientSessionSchema.safeParse(result.Item);
+    if (!parsed.success) {
+      // A pre-idle-timeout session has no lastActivityAt. Treat any malformed
+      // stored session as unauthenticated rather than returning HTTP 400.
+      console.warn(JSON.stringify({ event: "invalid_client_session_record" }));
+      return null;
+    }
+    return parsed.data;
   }
 
   async rotateSession(input: {
@@ -531,23 +539,28 @@ export class DynamoClientAuthStore implements ClientAuthStore {
     rawSessionId: string;
     session: ClientSession;
     newLastActivityAt: string;
-  }): Promise<void> {
-    await dynamo.send(
-      new UpdateCommand({
+  }): Promise<boolean> {
+    try {
+      await dynamo.send(new UpdateCommand({
         TableName: this.config.sessionTableName,
         Key: sessionKeys.clientSession(input.rawSessionId),
         UpdateExpression: "SET lastActivityAt = :newActivity",
-        // Only update if the session is still live and we have the right hash.
+        // Reject revocation, expiry, idle sessions, and out-of-order writes.
         ConditionExpression:
-          "sessionIdHash = :hash AND revokedAt = :null AND absoluteExpiresAt > :activity",
+          "sessionIdHash = :hash AND revokedAt = :null AND absoluteExpiresAt > :activity AND lastActivityAt >= :idleCutoff AND lastActivityAt <= :activity",
         ExpressionAttributeValues: {
           ":newActivity": input.newLastActivityAt,
           ":hash": input.session.sessionIdHash,
           ":null": null,
           ":activity": input.newLastActivityAt,
+          ":idleCutoff": new Date(Date.parse(input.newLastActivityAt) - CLIENT_INACTIVITY_TIMEOUT_MS).toISOString(),
         },
-      }),
-    );
+      }));
+      return true;
+    } catch (error) {
+      if (error instanceof Error && error.name === "ConditionalCheckFailedException") return false;
+      throw error;
+    }
   }
 
   async revokeSession(input: {

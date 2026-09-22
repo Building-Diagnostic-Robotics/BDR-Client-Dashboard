@@ -76,9 +76,14 @@ class FakeStore implements ClientAuthStore {
     this.session = input.newSession;
   }
   touched = 0;
+  touchOverride: ((input: { rawSessionId: string; session: ClientSession; newLastActivityAt: string }) => Promise<boolean>) | null = null;
   async touchSessionActivity(input: { rawSessionId: string; session: ClientSession; newLastActivityAt: string }) {
     this.touched += 1;
-    if (this.session) this.session = { ...this.session, lastActivityAt: input.newLastActivityAt };
+    if (this.touchOverride) return this.touchOverride(input);
+    if (!this.session || this.session.revokedAt !== null ||
+      Date.parse(this.session.lastActivityAt) > Date.parse(input.newLastActivityAt)) return false;
+    this.session = { ...this.session, lastActivityAt: input.newLastActivityAt };
+    return true;
   }
   async revokeSession() {
     this.revoked += 1;
@@ -132,11 +137,11 @@ function event(sessionId: string): APIGatewayProxyEventV2 {
   } as APIGatewayProxyEventV2;
 }
 
-function service(store = new FakeStore(), oauth = new FakeOAuth()) {
+function service(store = new FakeStore(), oauth = new FakeOAuth(), currentTime = now) {
   return {
     store,
     oauth,
-    auth: new ClientAuthService(store, cipher, oauth, () => now),
+    auth: new ClientAuthService(store, cipher, oauth, () => currentTime),
   };
 }
 
@@ -322,7 +327,7 @@ describe("client BFF authentication", () => {
     });
   });
 
-  it("touches session activity when last activity is older than 5 minutes", async () => {
+  it("records activity before every successful non-refresh request", async () => {
     const { auth, store } = service();
     const started = await auth.startLogin();
     const established = await auth.finishLogin({
@@ -331,17 +336,17 @@ describe("client BFF authentication", () => {
       loginCookie: started.state,
       requestId: "request",
     });
-    // Set lastActivityAt to 6 minutes before `now`
+    // Even a request two minutes after the last activity must extend the idle window.
     store.session = {
       ...established.session,
-      lastActivityAt: new Date(now.getTime() - 6 * 60 * 1000).toISOString(),
+      lastActivityAt: new Date(now.getTime() - 2 * 60 * 1000).toISOString(),
     };
     await auth.authenticate(event(established.rawSessionId));
     expect(store.touched).toBe(1);
     expect(store.session?.lastActivityAt).toBe(now.toISOString());
   });
 
-  it("does not touch session activity when last activity is within 5 minutes", async () => {
+  it("does not report success when the activity write fails", async () => {
     const { auth, store } = service();
     const started = await auth.startLogin();
     const established = await auth.finishLogin({
@@ -350,13 +355,48 @@ describe("client BFF authentication", () => {
       loginCookie: started.state,
       requestId: "request",
     });
-    // Set lastActivityAt to 2 minutes before `now`
-    store.session = {
-      ...established.session,
-      lastActivityAt: new Date(now.getTime() - 2 * 60 * 1000).toISOString(),
+    store.touchOverride = async () => { throw new Error("DynamoDB unavailable"); };
+    await expect(auth.authenticate(event(established.rawSessionId))).rejects.toThrow("DynamoDB unavailable");
+    expect(store.touched).toBe(1);
+  });
+
+  it("allows a concurrent newer touch but denies a revoked session", async () => {
+    const { auth, store } = service();
+    const started = await auth.startLogin();
+    const established = await auth.finishLogin({
+      code: "code", state: started.state, loginCookie: started.state, requestId: "request",
+    });
+    store.touchOverride = async () => {
+      store.session = { ...established.session, lastActivityAt: new Date(now.getTime() + 1_000).toISOString() };
+      return false;
     };
-    await auth.authenticate(event(established.rawSessionId));
-    expect(store.touched).toBe(0);
+    await expect(auth.authenticate(event(established.rawSessionId))).resolves.toMatchObject({
+      rawSessionId: established.rawSessionId,
+    });
+
+    store.session = established.session;
+    store.touchOverride = async () => {
+      store.session = { ...established.session, revokedAt: now.toISOString() };
+      return false;
+    };
+    await expect(auth.authenticate(event(established.rawSessionId))).rejects.toMatchObject({
+      code: "AUTHENTICATION_REQUIRED",
+    });
+  });
+
+  it("extends idle access on activity while preserving the eight-hour limit", async () => {
+    const store = new FakeStore();
+    const { auth } = service(store);
+    const started = await auth.startLogin();
+    const established = await auth.finishLogin({
+      code: "code", state: started.state, loginCookie: started.state, requestId: "request",
+    });
+    store.session = { ...established.session, accessTokenExpiresAt: "2026-09-13T23:00:00.000Z" };
+    await service(store, new FakeOAuth(), new Date("2026-09-13T14:29:00.000Z")).auth.authenticate(event(established.rawSessionId));
+    expect(store.session?.lastActivityAt).toBe("2026-09-13T14:29:00.000Z");
+    await service(store, new FakeOAuth(), new Date("2026-09-13T14:58:00.000Z")).auth.authenticate(event(established.rawSessionId));
+    expect(store.session?.lastActivityAt).toBe("2026-09-13T14:58:00.000Z");
+    await expect(service(store, new FakeOAuth(), new Date("2026-09-13T22:00:00.000Z")).auth.authenticate(event(established.rawSessionId)))
+      .rejects.toMatchObject({ code: "AUTHENTICATION_REQUIRED" });
   });
 });
-

@@ -4,6 +4,8 @@ import {
   clientInspectionSchema,
   clientMeResponseSchema,
   clientProjectSchema,
+  clientProjectListResponseSchema,
+  clientProjectSummarySchema,
   clientReportMetadataSchema,
 } from "./client";
 
@@ -46,5 +48,27 @@ describe("client response contracts", () => {
       currentVersionId: "version_0123456789abcdef",
       publishedAt: "2026-09-07T15:00:00.000Z",
     }).success).toBe(false);
+  });
+
+  it("keeps project detail and project-list summary response shapes distinct", () => {
+    const project = {
+      projectId: "project_0123456789abcdef",
+      displayName: "Midland Business Park",
+      address: "4300 West Loop, Fort Worth, TX",
+      timeZone: "America/Chicago",
+    };
+    const summary = {
+      ...project,
+      latestInspection: {
+        scannedAt: "2026-09-04T14:30:00.000Z",
+        scanTimeZone: "America/Chicago",
+        overallStatus: "PUBLISHED",
+      },
+    };
+    expect(clientProjectSchema.safeParse(project).success).toBe(true);
+    expect(clientProjectSchema.safeParse(summary).success).toBe(false);
+    expect(clientProjectSummarySchema.safeParse(summary).success).toBe(true);
+    expect(clientProjectListResponseSchema.safeParse({ items: [summary] }).success).toBe(true);
+    expect(clientProjectListResponseSchema.safeParse({ items: [project] }).success).toBe(false);
   });
 });

@@ -4,7 +4,7 @@ import {
   clientOrganizationDocumentMetadataSchema,
   clientProjectListResponseSchema,
   type ClientOrganizationDocumentMetadata,
-  type ClientProject,
+  type ClientProjectSummary,
 } from "@bdr/contracts";
 import Link from "next/link";
 import { useEffect, useState } from "react";
@@ -19,7 +19,7 @@ type PageState =
   | { status: "loading" }
   | {
       status: "ready";
-      projects: readonly ClientProject[];
+      projects: readonly ClientProjectSummary[];
       guide: ClientOrganizationDocumentMetadata | null;
     }
   | { status: "error"; message: string };
@@ -227,4 +227,3 @@ export default function ProjectsPage() {
     </>
   );
 }
-
