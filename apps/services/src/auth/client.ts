@@ -29,8 +29,16 @@ import {
 } from "./primitives";
 
 const LOGIN_LIFETIME_MS = 10 * 60 * 1000;
-const SESSION_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
+/** 8 hours: hard maximum lifetime per session regardless of activity. */
+const SESSION_LIFETIME_MS = 8 * 60 * 60 * 1000;
 const REFRESH_WINDOW_MS = 60 * 1000;
+/**
+ * How often (at most) we write a fresh lastActivityAt to DynamoDB.
+ * Requests within this window are still authorized — the inactivity deadline is
+ * enforced in the domain layer against the stored timestamp.
+ * 5 minutes means the effective idle window is 30 min + up to 5 min jitter.
+ */
+const ACTIVITY_TOUCH_INTERVAL_MS = 5 * 60 * 1000;
 
 export type ClientTokenSet = Readonly<{
   accessToken: string;
@@ -68,6 +76,12 @@ export interface ClientAuthStore extends ClientContextRepository {
     newRawSessionId: string;
     newSession: ClientSession;
     revokedAt: string;
+  }): Promise<void>;
+  /** Update lastActivityAt on a live session without rotating it. */
+  touchSessionActivity(input: {
+    rawSessionId: string;
+    session: ClientSession;
+    newLastActivityAt: string;
   }): Promise<void>;
   revokeSession(input: {
     rawSessionId: string;
@@ -226,6 +240,7 @@ export class ClientAuthService {
       absoluteExpiresAt,
       ttlExpiresAt: ttl(absoluteExpiresAt),
       revokedAt: null,
+      lastActivityAt: now.toISOString(),
     };
     await this.store.consumeLoginAndCreateSession({
       state: input.state,
@@ -250,46 +265,64 @@ export class ClientAuthService {
       now,
     });
 
-    if (!allowRefresh || Date.parse(session.accessTokenExpiresAt) > now.getTime() + REFRESH_WINDOW_MS) {
-      return { rawSessionId, csrfToken: "", session, identity, returnTo: "/" };
+    // Token refresh path — rotate the session (updates all fields including lastActivityAt).
+    if (allowRefresh && Date.parse(session.accessTokenExpiresAt) <= now.getTime() + REFRESH_WINDOW_MS) {
+      let refreshed: ClientTokenSet;
+      let verified: VerifiedClientTokens;
+      try {
+        const refreshToken = await this.cipher.decrypt(session.refreshTokenCiphertext);
+        refreshed = await this.oauth.refresh(refreshToken);
+        verified = await this.oauth.verifyRefresh(refreshed, session.issuer, session.sub);
+      } catch {
+        authenticationRequired();
+      }
+      const newRawSessionId = randomToken(48);
+      const newCsrfToken = randomToken();
+      const newSession: ClientSession = {
+        ...session,
+        sessionIdHash: sha256(newRawSessionId),
+        accessTokenCiphertext: await this.cipher.encrypt(refreshed.accessToken),
+        refreshTokenCiphertext: refreshed.refreshToken
+          ? await this.cipher.encrypt(refreshed.refreshToken)
+          : session.refreshTokenCiphertext,
+        accessTokenExpiresAt: verified.accessTokenExpiresAt,
+        csrfTokenHash: createHash("sha256").update(newCsrfToken).digest("hex"),
+        revokedAt: null,
+        lastActivityAt: now.toISOString(),
+      };
+      await this.store.rotateSession({
+        oldRawSessionId: rawSessionId,
+        oldSession: session,
+        newRawSessionId,
+        newSession,
+        revokedAt: now.toISOString(),
+      });
+      return {
+        rawSessionId: newRawSessionId,
+        csrfToken: newCsrfToken,
+        session: newSession,
+        identity,
+        returnTo: "/",
+      };
     }
 
-    let refreshed: ClientTokenSet;
-    let verified: VerifiedClientTokens;
-    try {
-      const refreshToken = await this.cipher.decrypt(session.refreshTokenCiphertext);
-      refreshed = await this.oauth.refresh(refreshToken);
-      verified = await this.oauth.verifyRefresh(refreshed, session.issuer, session.sub);
-    } catch {
-      authenticationRequired();
+    // Non-refresh path — lazily touch lastActivityAt if it's older than the touch interval.
+    // This bounds the write frequency to at most once per ACTIVITY_TOUCH_INTERVAL_MS per session.
+    const activityAge = now.getTime() - Date.parse(session.lastActivityAt);
+    if (activityAge > ACTIVITY_TOUCH_INTERVAL_MS) {
+      const newLastActivityAt = now.toISOString();
+      // Fire-and-forget: a failed touch does not deny an otherwise valid request.
+      // The worst case is the stored lastActivityAt is slightly stale; the domain
+      // inactivity check still uses the stored value on the next request.
+      this.store.touchSessionActivity({ rawSessionId, session, newLastActivityAt }).catch((err: unknown) => {
+        console.warn(JSON.stringify({
+          event: "session_activity_touch_failed",
+          ...(err instanceof Error ? { errorMessage: err.message } : {}),
+        }));
+      });
     }
-    const newRawSessionId = randomToken(48);
-    const newCsrfToken = randomToken();
-    const newSession: ClientSession = {
-      ...session,
-      sessionIdHash: sha256(newRawSessionId),
-      accessTokenCiphertext: await this.cipher.encrypt(refreshed.accessToken),
-      refreshTokenCiphertext: refreshed.refreshToken
-        ? await this.cipher.encrypt(refreshed.refreshToken)
-        : session.refreshTokenCiphertext,
-      accessTokenExpiresAt: verified.accessTokenExpiresAt,
-      csrfTokenHash: createHash("sha256").update(newCsrfToken).digest("hex"),
-      revokedAt: null,
-    };
-    await this.store.rotateSession({
-      oldRawSessionId: rawSessionId,
-      oldSession: session,
-      newRawSessionId,
-      newSession,
-      revokedAt: now.toISOString(),
-    });
-    return {
-      rawSessionId: newRawSessionId,
-      csrfToken: newCsrfToken,
-      session: newSession,
-      identity,
-      returnTo: "/",
-    };
+
+    return { rawSessionId, csrfToken: "", session, identity, returnTo: "/" };
   }
 
   async logout(event: APIGatewayProxyEventV2, requestId: string): Promise<string> {

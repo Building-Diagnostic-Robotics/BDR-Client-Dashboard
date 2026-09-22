@@ -41,6 +41,7 @@ class FixtureRepository implements ClientVisibilityRepository {
     absoluteExpiresAt: "2026-09-14T00:00:00.000Z",
     ttlExpiresAt: 1,
     revokedAt: null,
+    lastActivityAt: "2026-09-13T14:00:00.000Z",
   };
 
   identity: ClientIdentity | null = {

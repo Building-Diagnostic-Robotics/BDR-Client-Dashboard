@@ -8,6 +8,7 @@ import {
   GetCommand,
   PutCommand,
   TransactWriteCommand,
+  UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import {
   adminInvitationSchema,
@@ -124,6 +125,10 @@ export class CognitoClientOAuth implements ClientOAuth {
       nonce: input.nonce,
       code_challenge: input.codeChallenge,
       code_challenge_method: "S256",
+      // Require fresh credentials every time the dashboard redirects to Cognito.
+      // This prevents Cognito's own SSO session from silently re-authenticating
+      // a user whose BDR dashboard session has expired.
+      prompt: "login",
     }).toString();
     return url.toString();
   }
@@ -518,6 +523,29 @@ export class DynamoClientAuthStore implements ClientAuthStore {
             },
           },
         ],
+      }),
+    );
+  }
+
+  async touchSessionActivity(input: {
+    rawSessionId: string;
+    session: ClientSession;
+    newLastActivityAt: string;
+  }): Promise<void> {
+    await dynamo.send(
+      new UpdateCommand({
+        TableName: this.config.sessionTableName,
+        Key: sessionKeys.clientSession(input.rawSessionId),
+        UpdateExpression: "SET lastActivityAt = :newActivity",
+        // Only update if the session is still live and we have the right hash.
+        ConditionExpression:
+          "sessionIdHash = :hash AND revokedAt = :null AND absoluteExpiresAt > :activity",
+        ExpressionAttributeValues: {
+          ":newActivity": input.newLastActivityAt,
+          ":hash": input.session.sessionIdHash,
+          ":null": null,
+          ":activity": input.newLastActivityAt,
+        },
       }),
     );
   }

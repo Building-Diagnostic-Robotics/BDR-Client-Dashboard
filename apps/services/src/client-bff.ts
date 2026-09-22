@@ -17,7 +17,7 @@ import {
 import { JSON_HEADERS, clearCookie, json, redirect, requestId, secureCookie } from "./shared/http";
 import { ClientResourceService } from "./client/resources";
 
-const SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
+const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60;
 const LOGIN_MAX_AGE_SECONDS = 10 * 60;
 
 type Dependencies = Readonly<{

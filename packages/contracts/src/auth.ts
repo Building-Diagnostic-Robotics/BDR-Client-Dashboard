@@ -37,6 +37,7 @@ export const clientSessionSchema = z.object({
   absoluteExpiresAt: isoInstantSchema,
   ttlExpiresAt: z.number().int().nonnegative(),
   revokedAt: isoInstantSchema.nullable(),
+  lastActivityAt: isoInstantSchema,
 });
 
 export const oauthLoginTransactionSchema = z.object({

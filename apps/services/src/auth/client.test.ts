@@ -75,6 +75,11 @@ class FakeStore implements ClientAuthStore {
     this.rotated += 1;
     this.session = input.newSession;
   }
+  touched = 0;
+  async touchSessionActivity(input: { rawSessionId: string; session: ClientSession; newLastActivityAt: string }) {
+    this.touched += 1;
+    if (this.session) this.session = { ...this.session, lastActivityAt: input.newLastActivityAt };
+  }
   async revokeSession() {
     this.revoked += 1;
     if (this.session) this.session = { ...this.session, revokedAt: now.toISOString() };
@@ -165,8 +170,9 @@ describe("client BFF authentication", () => {
     expect(established.session).toMatchObject({
       accessTokenCiphertext: "encrypted:access",
       refreshTokenCiphertext: "encrypted:refresh",
-      absoluteExpiresAt: "2026-09-20T14:00:00.000Z",
+      absoluteExpiresAt: "2026-09-13T22:00:00.000Z",
       revokedAt: null,
+      lastActivityAt: "2026-09-13T14:00:00.000Z",
     });
     expect(store.consumed).toBe(1);
   });
@@ -296,4 +302,61 @@ describe("client BFF authentication", () => {
     expect(warning).toHaveBeenCalledWith(expect.stringContaining("cognito_refresh_token_revocation_failed"));
     warning.mockRestore();
   });
+
+  it("denies authentication when the session has been idle for more than 30 minutes", async () => {
+    const { auth, store } = service();
+    const started = await auth.startLogin();
+    const established = await auth.finishLogin({
+      code: "code",
+      state: started.state,
+      loginCookie: started.state,
+      requestId: "request",
+    });
+    // Set lastActivityAt to 31 minutes before `now`
+    store.session = {
+      ...established.session,
+      lastActivityAt: new Date(now.getTime() - 31 * 60 * 1000).toISOString(),
+    };
+    await expect(auth.authenticate(event(established.rawSessionId))).rejects.toMatchObject({
+      code: "AUTHENTICATION_REQUIRED",
+    });
+  });
+
+  it("touches session activity when last activity is older than 5 minutes", async () => {
+    const { auth, store } = service();
+    const started = await auth.startLogin();
+    const established = await auth.finishLogin({
+      code: "code",
+      state: started.state,
+      loginCookie: started.state,
+      requestId: "request",
+    });
+    // Set lastActivityAt to 6 minutes before `now`
+    store.session = {
+      ...established.session,
+      lastActivityAt: new Date(now.getTime() - 6 * 60 * 1000).toISOString(),
+    };
+    await auth.authenticate(event(established.rawSessionId));
+    expect(store.touched).toBe(1);
+    expect(store.session?.lastActivityAt).toBe(now.toISOString());
+  });
+
+  it("does not touch session activity when last activity is within 5 minutes", async () => {
+    const { auth, store } = service();
+    const started = await auth.startLogin();
+    const established = await auth.finishLogin({
+      code: "code",
+      state: started.state,
+      loginCookie: started.state,
+      requestId: "request",
+    });
+    // Set lastActivityAt to 2 minutes before `now`
+    store.session = {
+      ...established.session,
+      lastActivityAt: new Date(now.getTime() - 2 * 60 * 1000).toISOString(),
+    };
+    await auth.authenticate(event(established.rawSessionId));
+    expect(store.touched).toBe(0);
+  });
 });
+
