@@ -633,6 +633,11 @@ h3 {
   font-weight: 500;
 }
 
+.meta-value--none {
+  color: var(--gray-400);
+  font-weight: 400;
+}
+
 .status-pill {
   display: inline-flex;
   align-items: center;

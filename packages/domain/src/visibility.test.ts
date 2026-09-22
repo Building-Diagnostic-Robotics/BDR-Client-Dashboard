@@ -375,4 +375,58 @@ describe("central client visibility policy", () => {
       policy.listVisibleReportMetadata(clientContext, projectId, inspectionId),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
+
+  it("latestInspectionSummaryForProject returns null for a project with no inspections", async () => {
+    const repository = new FixtureRepository();
+    const policy = new ClientVisibilityPolicy(repository);
+    const clientContext = await context(repository);
+    repository.inspection = null;
+    await expect(
+      policy.latestInspectionSummaryForProject(clientContext, repository.project!),
+    ).resolves.toBeNull();
+  });
+
+  it("latestInspectionSummaryForProject returns null when all inspections are draft", async () => {
+    const repository = new FixtureRepository();
+    const policy = new ClientVisibilityPolicy(repository);
+    const clientContext = await context(repository);
+    repository.inspection = { ...repository.inspection!, publicationStatus: "DRAFT" };
+    await expect(
+      policy.latestInspectionSummaryForProject(clientContext, repository.project!),
+    ).resolves.toBeNull();
+  });
+
+  it("latestInspectionSummaryForProject derives PUBLISHED status when at least one report is published", async () => {
+    const repository = new FixtureRepository();
+    const policy = new ClientVisibilityPolicy(repository);
+    const clientContext = await context(repository);
+    // report fixture has deliveryStatus: PUBLISHED
+    await expect(
+      policy.latestInspectionSummaryForProject(clientContext, repository.project!),
+    ).resolves.toEqual({
+      scannedAt: "2026-09-04T14:30:00.000Z",
+      scanTimeZone: "America/Chicago",
+      overallStatus: "PUBLISHED",
+    });
+  });
+
+  it("latestInspectionSummaryForProject derives EXPECTED status when any report is EXPECTED", async () => {
+    const repository = new FixtureRepository();
+    const policy = new ClientVisibilityPolicy(repository);
+    const clientContext = await context(repository);
+    repository.report = { ...repository.report!, deliveryStatus: "EXPECTED", currentVersionId: null };
+    await expect(
+      policy.latestInspectionSummaryForProject(clientContext, repository.project!),
+    ).resolves.toMatchObject({ overallStatus: "EXPECTED" });
+  });
+
+  it("latestInspectionSummaryForProject derives NONE when all reports are NOT_INCLUDED", async () => {
+    const repository = new FixtureRepository();
+    const policy = new ClientVisibilityPolicy(repository);
+    const clientContext = await context(repository);
+    repository.report = { ...repository.report!, deliveryStatus: "NOT_INCLUDED", currentVersionId: null };
+    await expect(
+      policy.latestInspectionSummaryForProject(clientContext, repository.project!),
+    ).resolves.toMatchObject({ overallStatus: "NONE" });
+  });
 });

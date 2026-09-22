@@ -87,13 +87,19 @@ export class ClientResourceService {
   }
 
   async projects(context: ClientContext) {
-    return (await this.policy.listVisibleProjects(context)).map((project) =>
+    const projects = await this.policy.listVisibleProjects(context);
+    const summaries = await Promise.all(
+      projects.map((project) => this.policy.latestInspectionSummaryForProject(context, project)),
+    );
+    return projects.map((project, idx) =>
       clientResponse(clientProjectSchema, {
         projectId: project.projectId,
         displayName: project.displayName,
         address: project.address,
         timeZone: project.timeZone,
-      }));
+        latestInspection: summaries[idx] ?? null,
+      })
+    );
   }
 
   async project(context: ClientContext, projectId: string) {
