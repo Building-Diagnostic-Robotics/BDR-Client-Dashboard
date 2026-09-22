@@ -9,6 +9,7 @@ import {
   clientMeResponseSchema,
   clientOrganizationDocumentMetadataSchema,
   clientProjectSchema,
+  clientProjectSummarySchema,
   clientReportMetadataSchema,
   documentVersionSchema,
   inspectionSchema,
@@ -92,7 +93,7 @@ export class ClientResourceService {
       projects.map((project) => this.policy.latestInspectionSummaryForProject(context, project)),
     );
     return projects.map((project, idx) =>
-      clientResponse(clientProjectSchema, {
+      clientResponse(clientProjectSummarySchema, {
         projectId: project.projectId,
         displayName: project.displayName,
         address: project.address,

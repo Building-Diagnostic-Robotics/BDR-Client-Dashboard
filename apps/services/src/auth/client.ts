@@ -8,9 +8,11 @@ import type {
 } from "@bdr/contracts";
 import {
   authenticationRequired,
+  assertActiveClientSession,
   forbidden,
   identityKeys,
   loadActiveClientAuthentication,
+  sessionKeys,
   sha256,
   assertInvitationCanBeAccepted,
   tenantKeys,
@@ -32,13 +34,6 @@ const LOGIN_LIFETIME_MS = 10 * 60 * 1000;
 /** 8 hours: hard maximum lifetime per session regardless of activity. */
 const SESSION_LIFETIME_MS = 8 * 60 * 60 * 1000;
 const REFRESH_WINDOW_MS = 60 * 1000;
-/**
- * How often (at most) we write a fresh lastActivityAt to DynamoDB.
- * Requests within this window are still authorized — the inactivity deadline is
- * enforced in the domain layer against the stored timestamp.
- * 5 minutes means the effective idle window is 30 min + up to 5 min jitter.
- */
-const ACTIVITY_TOUCH_INTERVAL_MS = 5 * 60 * 1000;
 
 export type ClientTokenSet = Readonly<{
   accessToken: string;
@@ -77,12 +72,12 @@ export interface ClientAuthStore extends ClientContextRepository {
     newSession: ClientSession;
     revokedAt: string;
   }): Promise<void>;
-  /** Update lastActivityAt on a live session without rotating it. */
+  /** Conditionally advance lastActivityAt; false means the record changed. */
   touchSessionActivity(input: {
     rawSessionId: string;
     session: ClientSession;
     newLastActivityAt: string;
-  }): Promise<void>;
+  }): Promise<boolean>;
   revokeSession(input: {
     rawSessionId: string;
     session: ClientSession;
@@ -306,20 +301,21 @@ export class ClientAuthService {
       };
     }
 
-    // Non-refresh path — lazily touch lastActivityAt if it's older than the touch interval.
-    // This bounds the write frequency to at most once per ACTIVITY_TOUCH_INTERVAL_MS per session.
-    const activityAge = now.getTime() - Date.parse(session.lastActivityAt);
-    if (activityAge > ACTIVITY_TOUCH_INTERVAL_MS) {
-      const newLastActivityAt = now.toISOString();
-      // Fire-and-forget: a failed touch does not deny an otherwise valid request.
-      // The worst case is the stored lastActivityAt is slightly stale; the domain
-      // inactivity check still uses the stored value on the next request.
-      this.store.touchSessionActivity({ rawSessionId, session, newLastActivityAt }).catch((err: unknown) => {
-        console.warn(JSON.stringify({
-          event: "session_activity_touch_failed",
-          ...(err instanceof Error ? { errorMessage: err.message } : {}),
-        }));
-      });
+    // A successful authenticated request must record activity before returning.
+    const touched = await this.store.touchSessionActivity({
+      rawSessionId,
+      session,
+      newLastActivityAt: now.toISOString(),
+    });
+    if (!touched) {
+      // A newer concurrent touch is harmless. Revoked, expired, or otherwise
+      // changed sessions must not be treated as authenticated.
+      const current = await this.store.getClientSession(
+        sessionKeys.clientSession(rawSessionId),
+        { consistentRead: true },
+      );
+      assertActiveClientSession(current, rawSessionId, now);
+      if (Date.parse(current.lastActivityAt) < now.getTime()) authenticationRequired();
     }
 
     return { rawSessionId, csrfToken: "", session, identity, returnTo: "/" };

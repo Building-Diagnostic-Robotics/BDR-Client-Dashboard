@@ -33,11 +33,14 @@ export const clientProjectSchema = z.object({
   displayName: z.string().trim().min(1).max(200),
   address: z.string().trim().min(1).max(500),
   timeZone: ianaTimeZoneSchema,
+}).strict();
+
+export const clientProjectSummarySchema = clientProjectSchema.extend({
   latestInspection: clientProjectInspectionSummarySchema.nullable(),
 }).strict();
 
 export const clientProjectListResponseSchema = z.object({
-  items: z.array(clientProjectSchema),
+  items: z.array(clientProjectSummarySchema),
 }).strict();
 
 export const clientInspectionSchema = z.object({
@@ -78,6 +81,7 @@ export type ClientSessionResponse = z.infer<typeof clientSessionResponseSchema>;
 export type ClientMeResponse = z.infer<typeof clientMeResponseSchema>;
 export type ClientProjectInspectionSummary = z.infer<typeof clientProjectInspectionSummarySchema>;
 export type ClientProject = z.infer<typeof clientProjectSchema>;
+export type ClientProjectSummary = z.infer<typeof clientProjectSummarySchema>;
 export type ClientProjectListResponse = z.infer<typeof clientProjectListResponseSchema>;
 export type ClientInspection = z.infer<typeof clientInspectionSchema>;
 export type ClientInspectionListResponse = z.infer<typeof clientInspectionListResponseSchema>;
