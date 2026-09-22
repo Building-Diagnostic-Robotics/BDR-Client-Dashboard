@@ -64,6 +64,10 @@ describe("client response contracts", () => {
         scanTimeZone: "America/Chicago",
         overallStatus: "PUBLISHED",
       },
+      latestReportUpdate: {
+        publishedAt: "2026-09-07T15:00:00.000Z",
+        scanTimeZone: "America/Chicago",
+      },
     };
     expect(clientProjectSchema.safeParse(project).success).toBe(true);
     expect(clientProjectSchema.safeParse(summary).success).toBe(false);

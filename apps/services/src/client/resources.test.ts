@@ -21,10 +21,16 @@ describe("client project responses", () => {
     const context = {} as never;
     vi.spyOn(resources.policy, "loadVisibleProject").mockResolvedValue(project);
     vi.spyOn(resources.policy, "listVisibleProjects").mockResolvedValue([project]);
-    vi.spyOn(resources.policy, "latestInspectionSummaryForProject").mockResolvedValue({
-      scannedAt: "2026-09-04T14:30:00.000Z",
-      scanTimeZone: "America/Chicago",
-      overallStatus: "PUBLISHED",
+    vi.spyOn(resources.policy, "projectVisibilitySummary").mockResolvedValue({
+      latestInspection: {
+        scannedAt: "2026-09-04T14:30:00.000Z",
+        scanTimeZone: "America/Chicago",
+        overallStatus: "PUBLISHED",
+      },
+      latestReportUpdate: {
+        publishedAt: "2026-09-07T15:00:00.000Z",
+        scanTimeZone: "America/Chicago",
+      },
     });
 
     await expect(resources.project(context, project.projectId)).resolves.toEqual({
@@ -42,6 +48,10 @@ describe("client project responses", () => {
         scannedAt: "2026-09-04T14:30:00.000Z",
         scanTimeZone: "America/Chicago",
         overallStatus: "PUBLISHED",
+      },
+      latestReportUpdate: {
+        publishedAt: "2026-09-07T15:00:00.000Z",
+        scanTimeZone: "America/Chicago",
       },
     }]);
   });

@@ -85,6 +85,16 @@ export type LatestInspectionSummary = Readonly<{
   overallStatus: "PUBLISHED" | "EXPECTED" | "NONE";
 }>;
 
+export type LatestReportUpdate = Readonly<{
+  publishedAt: string;
+  scanTimeZone: string;
+}>;
+
+export type ClientProjectVisibilitySummary = Readonly<{
+  latestInspection: LatestInspectionSummary | null;
+  latestReportUpdate: LatestReportUpdate | null;
+}>;
+
 const consistentRead = { consistentRead: true } as const;
 
 export type ActiveClientAuthentication = Readonly<{
@@ -300,20 +310,15 @@ export class ClientVisibilityPolicy {
     );
   }
 
-  /**
-   * Returns the scan date and rolled-up report status for the most recent
-   * published inspection of `projectId`, or null if none exists.
-   *
-   * overallStatus derivation (evaluated only on ACTIVE, PUBLISHED inspections):
-   *   PUBLISHED – ≥1 report is PUBLISHED, none EXPECTED
-   *   EXPECTED  – ≥1 report is EXPECTED (PUBLISHED may also be present)
-   *   NONE      – all reports are NOT_INCLUDED or NOT_APPLICABLE
-   */
-  async latestInspectionSummaryForProject(
+  /** Summarizes visible inspections and the newest current report version across the project. */
+  async projectVisibilitySummary(
     context: ClientContext,
     project: Project,
-  ): Promise<LatestInspectionSummary | null> {
+  ): Promise<ClientProjectVisibilitySummary> {
     const organizationId = context.organization.organizationId;
+    if (project.organizationId !== organizationId || project.lifecycleStatus !== "ACTIVE") {
+      notFound();
+    }
     const organizationPk = tenantKeys.organization(organizationId).PK;
     const inspections = await this.repository.queryInspections(
       organizationPk,
@@ -331,24 +336,15 @@ export class ClientVisibilityPolicy {
       .slice()
       .sort((a, b) => Date.parse(b.scannedAt) - Date.parse(a.scannedAt));
 
-    const latest = visible[0];
-    if (!latest) return null;
+    const reportsByInspection = await Promise.all(visible.map((inspection) =>
+      this.visibleReportMetadataForInspection(organizationId, project.projectId, inspection.inspectionId)
+    ));
 
-    const reports = await this.repository.queryReports(
-      organizationPk,
-      project.projectId,
-      latest.inspectionId,
-      consistentRead,
-    );
-    const validReports = reports.filter(
-      (r) =>
-        r.organizationId === organizationId &&
-        r.projectId === project.projectId &&
-        r.inspectionId === latest.inspectionId,
-    );
+    const latest = visible[0];
+    const latestReports = reportsByInspection[0] ?? [];
 
     let overallStatus: LatestInspectionSummary["overallStatus"] = "NONE";
-    for (const report of validReports) {
+    for (const report of latestReports) {
       if (report.deliveryStatus === "EXPECTED") {
         overallStatus = "EXPECTED";
         break;
@@ -358,10 +354,27 @@ export class ClientVisibilityPolicy {
       }
     }
 
+    let latestReportUpdate: LatestReportUpdate | null = null;
+    for (let index = 0; index < visible.length; index++) {
+      const inspection = visible[index]!;
+      for (const report of reportsByInspection[index] ?? []) {
+        if (!report.publishedAt) continue;
+        if (!latestReportUpdate || Date.parse(report.publishedAt) > Date.parse(latestReportUpdate.publishedAt)) {
+          latestReportUpdate = {
+            publishedAt: report.publishedAt,
+            scanTimeZone: inspection.scanTimeZone,
+          };
+        }
+      }
+    }
+
     return {
-      scannedAt: latest.scannedAt,
-      scanTimeZone: latest.scanTimeZone,
-      overallStatus,
+      latestInspection: latest ? {
+        scannedAt: latest.scannedAt,
+        scanTimeZone: latest.scanTimeZone,
+        overallStatus,
+      } : null,
+      latestReportUpdate,
     };
   }
 
@@ -395,6 +408,14 @@ export class ClientVisibilityPolicy {
   ): Promise<readonly VisibleReportMetadata[]> {
     await this.loadVisibleInspection(context, projectId, inspectionId);
     const organizationId = context.organization.organizationId;
+    return this.visibleReportMetadataForInspection(organizationId, projectId, inspectionId);
+  }
+
+  private async visibleReportMetadataForInspection(
+    organizationId: string,
+    projectId: string,
+    inspectionId: string,
+  ): Promise<readonly VisibleReportMetadata[]> {
     const reports = await this.repository.queryReports(
       tenantKeys.organization(organizationId).PK,
       projectId,

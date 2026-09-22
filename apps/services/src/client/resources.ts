@@ -90,7 +90,7 @@ export class ClientResourceService {
   async projects(context: ClientContext) {
     const projects = await this.policy.listVisibleProjects(context);
     const summaries = await Promise.all(
-      projects.map((project) => this.policy.latestInspectionSummaryForProject(context, project)),
+      projects.map((project) => this.policy.projectVisibilitySummary(context, project)),
     );
     return projects.map((project, idx) =>
       clientResponse(clientProjectSummarySchema, {
@@ -98,7 +98,8 @@ export class ClientResourceService {
         displayName: project.displayName,
         address: project.address,
         timeZone: project.timeZone,
-        latestInspection: summaries[idx] ?? null,
+        latestInspection: summaries[idx]?.latestInspection ?? null,
+        latestReportUpdate: summaries[idx]?.latestReportUpdate ?? null,
       })
     );
   }

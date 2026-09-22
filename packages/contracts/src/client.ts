@@ -37,6 +37,10 @@ export const clientProjectSchema = z.object({
 
 export const clientProjectSummarySchema = clientProjectSchema.extend({
   latestInspection: clientProjectInspectionSummarySchema.nullable(),
+  latestReportUpdate: z.object({
+    publishedAt: z.iso.datetime({ offset: true }),
+    scanTimeZone: ianaTimeZoneSchema,
+  }).strict().nullable(),
 }).strict();
 
 export const clientProjectListResponseSchema = z.object({
