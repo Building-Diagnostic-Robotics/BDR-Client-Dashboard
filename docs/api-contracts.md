@@ -17,7 +17,8 @@ The dashboard uses relative same-origin `/bff/*` routes through Netlify. Browser
 
 | Route group | Purpose |
 | --- | --- |
-| `GET /bff/auth/session`, `GET /bff/me` | Validate the opaque browser session and return the organization display name. |
+| `GET /bff/auth/session`, `GET /bff/me` | Validate the opaque browser session and return the organization display name. `admin` is present only for an admin-pool session. |
+| `POST /bff/auth/password` | Email and password sign-in. May return `newPassword` when Cognito still requires a replacement password. |
 | `GET /bff/me/projects` | List active projects in the authenticated user's organization. |
 | `GET /bff/projects/{projectId}` | Get a visible project. |
 | `GET /bff/projects/{projectId}/inspections` | List active, published inspections. |
@@ -27,6 +28,10 @@ The dashboard uses relative same-origin `/bff/*` routes through Netlify. Browser
 | `POST /bff/logout` | Revoke the portal session and return the Cognito logout redirect. |
 
 All client mutations require the expected origin and the `x-bdr-csrf` header. Resource IDs in the browser never establish organization ownership. A `401` means the server session is absent, expired, or revoked; a `404` intentionally combines missing and client-invisible resources.
+
+`POST /bff/auth/password` accepts an email, password, and optional MFA or new-password challenge. A completed sign-in sets the session cookie and returns `returnTo`.
+
+The current dashboard also calls the building portal routes under `/bff/portal/*`: building lists and status, file URLs, administrator client-user management, and building actions such as approve, hide, and client edits. Those responses are enforced in `apps/services/src/client-bff.ts` and `apps/services/src/portal/buildings.ts`. They are not yet described by the Zod schemas in `packages/contracts`. Ownership still comes from the session. Administrator-only routes return `403` for a client. See [backend](./backend.md) for the route table and [frontend](./frontend.md) for the pages.
 
 ## Portal Admin API
 

@@ -2,10 +2,13 @@
 
 BDR Inspections Dashboard is the secure client portal for Building Diagnostic Robotics. Clients can view their buildings, published inspection history, the organization-level How to Read guide, and current report PDFs.
 
-V1 is complete. BDR staff currently use the TOTP-protected `portal-admin` CLI for organizations, users, projects, inspections, uploads, publication, replacement, and archive/restore. The next phase is an admin UI in the separate ReportGen application, using the existing Portal Admin API.
+V1 registry publication remains available through the TOTP-protected `portal-admin` CLI. Buildings released from ReportGen are a separate shared-file path on `bdr-roofus-uploads`. History: [CHANGELOG.md](./CHANGELOG.md).
 
-## Handoff documentation
+## Documentation
 
+- [Changelog](./CHANGELOG.md)
+- [Frontend](./docs/frontend.md): Next.js dashboard, routes, and session handling
+- [Backend](./docs/backend.md): Lambda handlers, authentication, and the two client data paths
 - [Architecture](./docs/architecture.md)
 - [API contracts](./docs/api-contracts.md)
 - [Project layout](./docs/project_layout.md)

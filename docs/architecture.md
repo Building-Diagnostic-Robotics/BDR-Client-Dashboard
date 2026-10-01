@@ -2,9 +2,12 @@
 
 ## Purpose and current status
 
-The BDR Inspections Dashboard is the client-facing portal for published BDR inspection reports. V1 is deployed and operated independently from ReportGen. Clients can view buildings, published inspections, organization-level How to Read guidance, and current PDF report versions. BDR staff currently administer the portal with the authenticated `portal-admin` CLI.
+The BDR Inspections Dashboard is the client-facing portal. It has two data paths, described in [backend](./backend.md) and [frontend](./frontend.md).
 
-ReportGen remains the internal system that creates reports. It does not have access to portal tables or portal buckets, and it is not yet integrated with the portal administration API.
+- **Registry.** DynamoDB projects, inspections, and private portal-bucket PDFs. Staff publish those with the `portal-admin` CLI and the Portal Admin API. ReportGen does not write those tables or buckets.
+- **Shared buildings.** ReportGen and this dashboard both use `reportgen_portal/org_links.json` and `{building}reportgen/client_portal/` on `bdr-roofus-uploads`. ReportGen releases a building and sends a PDF. A portal administrator approves it here before a client can open it.
+
+History: [CHANGELOG.md](../CHANGELOG.md).
 
 ## System overview
 
@@ -71,7 +74,7 @@ The current administration path is separate from client authentication:
 - The API requires the Cognito group, a live active `AdminProfile`, an explicit issuer/sub identity mapping, an active AdminSession, and confirmed software-token MFA.
 - The CLI has no AWS data-plane credentials. Upload and publication permissions remain in narrowly scoped portal Lambda roles.
 
-The CLI remains supported. A future ReportGen admin UI must use the Admin API rather than portal tables or buckets directly. Its authentication and cutover design are intentionally open for the ReportGen owner. Any design must preserve explicit identity mapping from an authenticated subject to `adminId`, complete audit attribution, and TOTP for every ReportGen user. It must never map privileged users by email, name, or Cognito group alone.
+The CLI remains the administration path for the registry. ReportGen operators use their own app to release buildings and send PDFs on the shared-file path. Client-site pages under `/bff/portal/*` approve those PDFs, manage linked client folders, and serve the building, map, and review views. A non-admin `GET /bff/me` omits the `admin` field so the previously published dashboard schema still accepts the account payload. Admin sessions include `admin: true`.
 
 ## Operational safeguards
 
@@ -79,4 +82,8 @@ All portal DynamoDB tables use point-in-time recovery, customer-managed encrypti
 
 CloudWatch alarms cover Lambda errors/throttles, API 5xx responses, DynamoDB throttles, audit-export failures, EventBridge delivery failures, and forbidden audit mutations. CloudTrail records writes and deletes to the published-object prefix and writes to the audit table.
 
-See [API contracts](./api-contracts.md), [project layout](./project_layout.md), and the [runbooks](./runbooks/).
+## Shared building portal
+
+The dashboard’s building list, building view, map, review queue, and organization tools use a second path on the Client BFF. That path reads and writes building status JSON in the shared data bucket. It does not publish into the inspection registry. Clients only receive buildings linked to their organization. Portal administrator actions, including approval and client-user management, require an admin-pool session.
+
+See [backend](./backend.md), [frontend](./frontend.md), [API contracts](./api-contracts.md), [project layout](./project_layout.md), and the [runbooks](./runbooks/).

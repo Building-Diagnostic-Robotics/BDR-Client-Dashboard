@@ -2,7 +2,7 @@
 
 ## V1 status
 
-V1 is complete and deployed. The client dashboard supports invite-only client access, tenant-isolated projects, current and historical published inspections, four report classifications, organization-level How to Read, direct Preview/Download, ZIP downloads, immutable report replacements, project/inspection archive and restore, and client logout/session handling.
+V1 is complete and deployed. The client dashboard supports invite-only client access, tenant-isolated projects, current and historical published inspections, four report classifications, organization-level How to Read, direct Preview/Download, ZIP downloads, immutable report replacements, project/inspection archive and restore, and client logout/session handling. The current pages also let clients and portal administrators sign in and work from shared building status. See [backend](./docs/backend.md) and [frontend](./docs/frontend.md).
 
 Production Playwright validation passed in Chromium and WebKit using dedicated test clients. The current client UI is deployed through Netlify; AWS infrastructure, the Client BFF, Admin API, storage, Cognito, and monitoring are deployed through the portal CDK stack.
 
@@ -23,19 +23,19 @@ Published client content follows these non-negotiable rules:
 
 See [architecture.md](./docs/architecture.md), [api-contracts.md](./docs/api-contracts.md), and [project_layout.md](./docs/project_layout.md) for the handoff reference.
 
-## Next phase: ReportGen admin UI
+## Shared building portal
 
-The next product phase is an administration UI inside the existing BDR ReportGen application. It should be a client of the unchanged Portal Admin API and cover the current CLI workflows: organization/user management, projects, inspections, uploads, report classifications, publish/replace, How to Read, and archive/restore.
+ReportGen and this dashboard now share building status on `bdr-roofus-uploads`. ReportGen links a client folder, releases a building, and sends a PDF. This dashboard's `/bff/portal/*` routes perform the second approval and show buildings, the map, and review. The registry CLI and Admin API are unchanged and still own DynamoDB projects, inspections, and immutable portal-bucket versions.
 
-Do not allow ReportGen code to write portal DynamoDB records, manage portal client Cognito users, sign client report URLs, or copy objects between portal buckets directly. The UI must preserve API idempotency keys, revision conflict handling, operator confirmation, approval attestation, and immutable publication semantics.
+ReportGen must not write portal DynamoDB, portal buckets, or client Cognito users. The Client BFF may touch only `reportgen_portal/*` and the per-building `reportgen/client_portal/` prefixes on the data bucket.
 
-Portal Admin Cognito and the CLI remain the implemented and supported administration method. The ReportGen authentication and cutover design is intentionally deferred to the ReportGen owner. If ReportGen identities are later authorized for portal administration, the design must provide explicit subject-to-`adminId` mapping, preserve audit attribution, require TOTP for every ReportGen user, and never map identities by email or display name.
+The new client pages (`/sign-in`, `/buildings/view`, `/map`, `/review`, `/admin-tools`) ship in this repository. They appear on https://bdrdashboard.netlify.app only after that site is published from this repo.
 
 ## Deferred work
 
-- Controlled ReportGen export/import: a separate export bucket or prefix, manifest-last publication, and a portal import worker. The portal must never read ReportGen operational buckets.
-- Client notification emails, personalized PDF watermarking, multipart/resumable uploads, and report ingestion automation.
-- Any ReportGen authentication integration, identity migration, or change to the current CLI administration path.
+- Moving registry administration (organizations, DynamoDB projects, portal-bucket publication) into ReportGen. That work, if it happens, stays on the Admin API.
+- Client notification emails, personalized PDF watermarking, and multipart uploads.
+- Replacing the CLI for registry publication.
 
 ## Operations
 
