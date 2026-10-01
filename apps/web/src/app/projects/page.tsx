@@ -1,49 +1,59 @@
 "use client";
 
-import {
-  clientOrganizationDocumentMetadataSchema,
-  clientProjectListResponseSchema,
-  type ClientOrganizationDocumentMetadata,
-  type ClientProjectSummary,
-} from "@bdr/contracts";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
 
-import { ArtifactActions } from "../../components/artifact-actions";
-import { ArrowRightIcon, FileIcon, SearchIcon } from "../../components/icons";
+import { ArrowRightIcon, SearchIcon } from "../../components/icons";
 import { usePortal } from "../../components/portal-shell";
 import { ClientApiError, getClient } from "../../lib/client-api";
-import { formatReportUpdatedDate, formatShortDate } from "../../lib/format";
+
+type Building = {
+  buildingPrefix: string;
+  displayName: string;
+  address: string;
+  scanTime: string | null;
+  uploadTime: string | null;
+  readyReports: string[];
+};
+
+const asBuildings = {
+  parse(value: unknown): { items: Building[]; admin: boolean } {
+    const row = value as { items?: Building[]; admin?: boolean };
+    return { items: row.items ?? [], admin: Boolean(row.admin) };
+  },
+};
 
 type PageState =
   | { status: "loading" }
-  | {
-      status: "ready";
-      projects: readonly ClientProjectSummary[];
-      guide: ClientOrganizationDocumentMetadata | null;
-    }
+  | { status: "ready"; projects: readonly Building[] }
   | { status: "error"; message: string };
 
-export default function ProjectsPage() {
+function clientName(prefix: string): string {
+  return prefix.replace(/^\/+|\/+$/g, "").split("/")[0] || prefix;
+}
+
+function ProjectsPageContent() {
   const { organization } = usePortal();
+  const requestedClient = useSearchParams().get("client");
   const [state, setState] = useState<PageState>({ status: "loading" });
   const [searchQuery, setSearchQuery] = useState("");
+  const [robot, setRobot] = useState("");
+  const [reportType, setReportType] = useState("");
+  const [scanFrom, setScanFrom] = useState("");
+  const [scanTo, setScanTo] = useState("");
+  const [selectedClient, setSelectedClient] = useState<string | null>(requestedClient);
+  const [admin, setAdmin] = useState(false);
 
   useEffect(() => {
     let active = true;
     async function load() {
       try {
-        const [projects, guide] = await Promise.all([
-          getClient("/bff/me/projects", clientProjectListResponseSchema),
-          getClient(
-            "/bff/me/documents/how-to-read",
-            clientOrganizationDocumentMetadataSchema,
-          ).catch((reason) => {
-            if (reason instanceof ClientApiError && reason.status === 404) return null;
-            throw reason;
-          }),
-        ]);
-        if (active) setState({ status: "ready", projects: projects.items, guide });
+        const projects = await getClient("/bff/portal/buildings", asBuildings);
+        if (active) {
+          setAdmin(projects.admin);
+          setState({ status: "ready", projects: projects.items });
+        }
       } catch (reason) {
         if (reason instanceof ClientApiError && reason.status === 401) {
           window.location.reload();
@@ -59,22 +69,47 @@ export default function ProjectsPage() {
     return () => { active = false; };
   }, []);
 
-  const filteredProjects = state.status === "ready"
-    ? state.projects.filter((project) => {
-        const q = searchQuery.trim().toLowerCase();
-        if (!q) return true;
-        return (
-          project.displayName.toLowerCase().includes(q) ||
-          project.address.toLowerCase().includes(q)
-        );
-      })
+  const clients = state.status === "ready"
+    ? [...new Set(state.projects.map((project) => clientName(project.buildingPrefix)))].sort()
     : [];
+  const showClients = admin && !selectedClient;
+  const clientBuildings = state.status === "ready"
+    ? (admin
+      ? state.projects.filter((project) => selectedClient && clientName(project.buildingPrefix) === selectedClient)
+      : state.projects)
+    : [];
+  const filteredClients = clients.filter((name) => name.toLowerCase().includes(searchQuery.trim().toLowerCase()));
+  const filteredProjects = clientBuildings.filter((project) => {
+    const q = searchQuery.trim().toLowerCase();
+    const parts = project.buildingPrefix.split("/");
+    const projectRobot = parts[1] || "";
+    if (robot && projectRobot !== robot) return false;
+    if (reportType && !project.readyReports.includes(reportType)) return false;
+    const day = project.scanTime?.slice(0, 10) ?? "";
+    if (scanFrom && (!day || day < scanFrom)) return false;
+    if (scanTo && (!day || day > scanTo)) return false;
+    if (!q) return true;
+    return (
+      project.displayName.toLowerCase().includes(q) ||
+      project.address.toLowerCase().includes(q) ||
+      project.buildingPrefix.toLowerCase().includes(q)
+    );
+  });
+  const robots = [...new Set(clientBuildings.map((project) => project.buildingPrefix.split("/")[1]).filter(Boolean))].sort();
 
   return (
     <>
       <section className="page-heading">
-        <h1>Your projects</h1>
-        <p>Inspection reports and building information for {organization.displayName}.</p>
+        <div className="section-header-row">
+          <h1>{showClients ? "Clients" : selectedClient ?? "Buildings"}</h1>
+        </div>
+        <p>
+          {showClients
+            ? "Choose a client. Create a client and send invites from Organization tools."
+            : admin
+              ? `Buildings for ${selectedClient}.`
+              : `Buildings for ${organization.displayName}.`}
+        </p>
       </section>
 
       {state.status === "loading" ? (
@@ -99,9 +134,9 @@ export default function ProjectsPage() {
           <section aria-labelledby="buildings-title">
             <div className="section-header-row">
               <div className="section-title-wrap">
-                <h2 id="buildings-title">Buildings</h2>
-                <span className="count-badge" aria-label={`${state.projects.length} buildings`}>
-                  {state.projects.length}
+                <h2 id="buildings-title">{showClients ? "Clients" : "Buildings"}</h2>
+                <span className="count-badge" aria-label={showClients ? `${clients.length} clients` : `${clientBuildings.length} buildings`}>
+                  {showClients ? clients.length : clientBuildings.length}
                 </span>
               </div>
               {state.projects.length > 0 ? (
@@ -111,8 +146,8 @@ export default function ProjectsPage() {
                     type="search"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search by building name or address…"
-                    aria-label="Search buildings"
+                    placeholder={showClients ? "Search clients…" : "Search buildings…"}
+                    aria-label={showClients ? "Search clients" : "Search buildings"}
                     className="search-bar__input"
                   />
                   {searchQuery ? (
@@ -129,39 +164,131 @@ export default function ProjectsPage() {
               ) : null}
             </div>
 
-            {state.projects.length === 0 ? (
-              <div className="empty-card">
-                <h3>No projects available</h3>
-                <p>Your published building projects will appear here.</p>
+            {!showClients ? (
+              <div className="filter-bar">
+                {admin && selectedClient ? (
+                  <button
+                    type="button"
+                    className="button button--outline"
+                    onClick={() => {
+                      setSelectedClient(null);
+                      setSearchQuery("");
+                      setRobot("");
+                      setReportType("");
+                      setScanFrom("");
+                      setScanTo("");
+                    }}
+                  >
+                    All clients
+                  </button>
+                ) : null}
+                <label>Robot
+                  <select value={robot} onChange={(event) => setRobot(event.target.value)}>
+                    <option value="">All</option>
+                    {robots.map((name) => <option key={name} value={name}>{name}</option>)}
+                  </select>
+                </label>
+                <label>Report
+                  <select value={reportType} onChange={(event) => setReportType(event.target.value)}>
+                    <option value="">All</option>
+                    <option value="ASSESSMENT">Assessment</option>
+                    <option value="EVIDENCE">Evidence</option>
+                    <option value="ROOF_TAKEOFF">Roof takeoff</option>
+                    <option value="CAPITAL_PLAN">Capital plan</option>
+                  </select>
+                </label>
+                <label>Scan from
+                  <input type="date" value={scanFrom} onChange={(event) => setScanFrom(event.target.value)} />
+                </label>
+                <label>Scan to
+                  <input type="date" value={scanTo} onChange={(event) => setScanTo(event.target.value)} />
+                </label>
+                {scanFrom || scanTo || robot || reportType ? (
+                  <button type="button" className="button button--outline" onClick={() => {
+                    setRobot("");
+                    setReportType("");
+                    setScanFrom("");
+                    setScanTo("");
+                  }}>Clear filters</button>
+                ) : null}
               </div>
-            ) : filteredProjects.length === 0 ? (
+            ) : null}
+            {showClients && clients.length === 0 ? (
+              <div className="empty-card">
+                <h3>No clients available</h3>
+                <p>Client folders appear here when buildings are available to your account.</p>
+              </div>
+            ) : showClients && filteredClients.length === 0 ? (
               <div className="empty-card empty-card--search">
                 <SearchIcon className="empty-card__search-icon" />
-                <h3>No matching buildings</h3>
-                <p>No buildings match &ldquo;{searchQuery}&rdquo;. Check the spelling or try another search term.</p>
-                <button
-                  type="button"
-                  className="button button--outline"
-                  onClick={() => setSearchQuery("")}
-                >
+                <h3>No matching clients</h3>
+                <p>No clients match &ldquo;{searchQuery}&rdquo;.</p>
+                <button type="button" className="button button--outline" onClick={() => setSearchQuery("")}>
                   Clear search
                 </button>
               </div>
+            ) : showClients ? (
+              <div className="project-grid">
+                {filteredClients.map((name) => {
+                  const count = state.projects.filter((project) => clientName(project.buildingPrefix) === name).length;
+                  return (
+                    <button
+                      type="button"
+                      className="project-card"
+                      key={name}
+                      onClick={() => {
+                        setSelectedClient(name);
+                        setSearchQuery("");
+                      }}
+                    >
+                      <div className="project-card__body">
+                        <div className="project-card__header">
+                          <div className="project-card__title-wrap">
+                            <h3>{name}</h3>
+                            <p className="project-card__address">{count} {count === 1 ? "building" : "buildings"}</p>
+                          </div>
+                          <span className="project-card__arrow" aria-hidden="true">
+                            <ArrowRightIcon />
+                          </span>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : filteredProjects.length === 0 ? (
+              searchQuery ? (
+                <div className="empty-card empty-card--search">
+                  <SearchIcon className="empty-card__search-icon" />
+                  <h3>No matching buildings</h3>
+                  <p>No buildings match &ldquo;{searchQuery}&rdquo;. Check the spelling or try another search term.</p>
+                  <button
+                    type="button"
+                    className="button button--outline"
+                    onClick={() => setSearchQuery("")}
+                  >
+                    Clear search
+                  </button>
+                </div>
+              ) : (
+                <div className="empty-card">
+                  <h3>No buildings yet</h3>
+                  <p>Buildings for this client appear here when they are available to your account.</p>
+                </div>
+              )
             ) : (
               <div className="project-grid">
-                {filteredProjects.map((project) => {
-                  const li = project.latestInspection;
-                  return (
+                {filteredProjects.map((project) => (
                     <Link
                       className="project-card"
-                      href={`/projects/${encodeURIComponent(project.projectId)}`}
-                      key={project.projectId}
+                      href={`/buildings/view?prefix=${encodeURIComponent(project.buildingPrefix)}`}
+                      key={project.buildingPrefix}
                     >
                       <div className="project-card__body">
                         <div className="project-card__header">
                           <div className="project-card__title-wrap">
                             <h3>{project.displayName}</h3>
-                            <p className="project-card__address">{project.address}</p>
+                            <p className="project-card__address">{project.address || "No address yet"}</p>
                           </div>
                           <span className="project-card__arrow" aria-hidden="true">
                             <ArrowRightIcon />
@@ -170,57 +297,33 @@ export default function ProjectsPage() {
                       </div>
                       <div className="project-card__footer">
                         <div className="meta-item">
-                          <span className="meta-label">Last scanned:</span>
-                          {li ? (
-                            <span className="meta-value">{formatShortDate(li.scannedAt, li.scanTimeZone)}</span>
-                          ) : (
-                            <span className="meta-value meta-value--none">No scans yet</span>
-                          )}
+                          <span className="meta-label">Scan:</span>
+                          <span className={project.scanTime ? "meta-value" : "meta-value meta-value--none"}>
+                            {project.scanTime ?? "No scan time"}
+                          </span>
                         </div>
                         <div className="meta-item">
                           <span className="meta-label">Reports:</span>
-                          {project.latestReportUpdate ? (
-                            <span className="meta-value">
-                              {formatReportUpdatedDate(
-                                project.latestReportUpdate.publishedAt,
-                                project.latestReportUpdate.scanTimeZone,
-                              )}
-                            </span>
-                          ) : (
-                            <span className="meta-value meta-value--none">No reports yet</span>
-                          )}
+                          <span className={project.readyReports.length ? "meta-value" : "meta-value meta-value--none"}>
+                            {project.readyReports.join(", ") || "No reports yet"}
+                          </span>
                         </div>
                       </div>
                     </Link>
-                  );
-                })}
+                ))}
               </div>
             )}
           </section>
-
-          {state.guide ? (
-            <section className="guide-banner" aria-labelledby="guide-title">
-              <div className="guide-banner__main">
-                <span className="guide-banner__icon"><FileIcon /></span>
-                <div className="guide-banner__copy">
-                  <div className="guide-banner__heading-row">
-                    <h3 id="guide-title">How to Read Your BDR Reports</h3>
-                    <span className="updated-label">Updated {formatShortDate(state.guide.publishedAt)}</span>
-                  </div>
-                  <p>Understand report terminology, condition ratings, and recommended next steps.</p>
-                </div>
-              </div>
-              <div className="guide-banner__actions">
-                <ArtifactActions
-                  accessPath="/bff/me/documents/how-to-read/access"
-                  label="the How to Read guide"
-                  compact
-                />
-              </div>
-            </section>
-          ) : null}
         </>
       ) : null}
     </>
+  );
+}
+
+export default function ProjectsPage() {
+  return (
+    <Suspense>
+      <ProjectsPageContent />
+    </Suspense>
   );
 }

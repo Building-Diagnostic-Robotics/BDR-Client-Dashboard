@@ -81,9 +81,10 @@ export class ClientResourceService {
     this.policy = new ClientVisibilityPolicy(repository);
   }
 
-  me(context: ClientContext) {
+  me(context: ClientContext, admin = false) {
     return clientResponse(clientMeResponseSchema, {
       organization: { displayName: context.organization.displayName },
+      admin,
     });
   }
 

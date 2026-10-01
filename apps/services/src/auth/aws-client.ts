@@ -114,7 +114,7 @@ export class CognitoClientOAuth implements ClientOAuth {
     this.jwks = createRemoteJWKSet(new URL(`${config.issuer}/.well-known/jwks.json`));
   }
 
-  authorizationUrl(input: { state: string; nonce: string; codeChallenge: string }): string {
+  authorizationUrl(input: { state: string; nonce: string; codeChallenge: string; loginHint?: string }): string {
     const url = new URL("/oauth2/authorize", this.config.authDomain);
     url.search = new URLSearchParams({
       client_id: this.config.clientId,
@@ -125,6 +125,7 @@ export class CognitoClientOAuth implements ClientOAuth {
       nonce: input.nonce,
       code_challenge: input.codeChallenge,
       code_challenge_method: "S256",
+      ...(input.loginHint ? { login_hint: input.loginHint } : {}),
       // Require fresh credentials every time the dashboard redirects to Cognito.
       // This prevents Cognito's own SSO session from silently re-authenticating
       // a user whose BDR dashboard session has expired.
@@ -172,6 +173,17 @@ export class CognitoClientOAuth implements ClientOAuth {
     return url.toString();
   }
 
+  async verifyIssued(tokens: ClientTokenSet): Promise<VerifiedClientTokens> {
+    if (!tokens.idToken) throw new Error("Cognito did not return an ID token");
+    const access = await this.verifyAccessToken(tokens.accessToken);
+    const { payload: id } = await jwtVerify(tokens.idToken, this.jwks, {
+      issuer: this.config.issuer,
+      audience: this.config.clientId,
+    });
+    if (id.token_use !== "id" || id.sub !== access.sub) throw new Error("Cognito ID token claims are invalid");
+    return access;
+  }
+
   async verifyInitial(tokens: ClientTokenSet, nonce: string): Promise<VerifiedClientTokens> {
     if (!tokens.idToken) throw new Error("Cognito did not return an ID token");
     const access = await this.verifyAccessToken(tokens.accessToken);
@@ -213,13 +225,14 @@ export class CognitoClientOAuth implements ClientOAuth {
     exp: number;
   } {
     const scopes = typeof payload.scope === "string" ? payload.scope.split(" ") : [];
+    const passwordLoginScope = scopes.includes("openid") || scopes.includes("aws.cognito.signin.user.admin");
     if (
       payload.token_use !== "access" ||
       payload.client_id !== this.config.clientId ||
       typeof payload.iss !== "string" ||
       typeof payload.sub !== "string" ||
       typeof payload.exp !== "number" ||
-      !scopes.includes("openid")
+      !passwordLoginScope
     ) {
       throw new Error("Cognito access token claims are invalid");
     }
@@ -367,6 +380,41 @@ export class DynamoClientAuthStore implements ClientAuthStore {
       }),
     );
     return result.Item ? organizationSchema.parse(result.Item) : null;
+  }
+
+  async ensurePortalAdmin(input: {
+    issuer: string;
+    sub: string;
+    organizationId: string;
+    userId: string;
+  }): Promise<ClientIdentity> {
+    const organization = {
+      organizationId: input.organizationId,
+      displayName: "BDR admins",
+      status: "ACTIVE" as const,
+    };
+    const identity: ClientIdentity = {
+      issuer: input.issuer,
+      sub: input.sub,
+      userId: input.userId,
+      organizationId: input.organizationId,
+      status: "ACTIVE",
+      invitationId: null,
+    };
+    await dynamo.send(new PutCommand({
+      TableName: this.config.tenantDataTableName,
+      Item: { ...tenantKeys.organization(input.organizationId), ...organization },
+    }));
+    const existing = await dynamo.send(new GetCommand({
+      TableName: this.config.identityTableName,
+      Key: identityKeys.subject(input.issuer, input.sub),
+      ConsistentRead: true,
+    }));
+    await dynamo.send(new PutCommand({
+      TableName: this.config.identityTableName,
+      Item: { ...(existing.Item ?? {}), ...identityKeys.subject(input.issuer, input.sub), ...identity },
+    }));
+    return identity;
   }
 
   async consumeLoginAndCreateSession(input: {

@@ -5,9 +5,10 @@ import type { APIGatewayProxyEventV2 } from "aws-lambda";
 
 import { cookies, header } from "../shared/http";
 
-export const CLIENT_SESSION_COOKIE = "__Host-bdr_client_session";
-export const CLIENT_LOGIN_COOKIE = "__Host-bdr_login";
-export const CLIENT_CSRF_COOKIE = "__Host-bdr_csrf";
+const localHttp = (process.env.PORTAL_ORIGIN ?? "").startsWith("http://");
+export const CLIENT_SESSION_COOKIE = localHttp ? "bdr_client_session" : "__Host-bdr_client_session";
+export const CLIENT_LOGIN_COOKIE = localHttp ? "bdr_login" : "__Host-bdr_login";
+export const CLIENT_CSRF_COOKIE = localHttp ? "bdr_csrf" : "__Host-bdr_csrf";
 export const CLIENT_CSRF_HEADER = "x-bdr-csrf";
 
 export function randomToken(bytes = 32): string {

@@ -102,8 +102,27 @@ export class PortalStack extends Stack {
     functions.clientBff.addEnvironment("CLIENT_AUTH_DOMAIN", clientAuthDomain);
     functions.clientBff.addEnvironment("CLIENT_CALLBACK_URL", `${config.portalOrigin}/bff/auth/callback`);
     functions.clientBff.addEnvironment("CLIENT_LOGOUT_URL", `${config.portalOrigin}/logged-out`);
+    functions.clientBff.addEnvironment(
+      "ADMIN_ISSUER",
+      `https://cognito-idp.${this.region}.amazonaws.com/${identity.adminUserPool.userPoolId}`,
+    );
+    functions.clientBff.addEnvironment("ADMIN_AUTH_DOMAIN", adminAuthDomain);
+    functions.clientBff.addEnvironment("ADMIN_APP_CLIENT_ID", identity.adminWebClient.userPoolClientId);
     functions.clientBff.addEnvironment("APPLICATION_KEY_ARN", keys.application.keyArn);
     functions.clientBff.addEnvironment("ARTIFACT_SIGNER_FUNCTION_NAME", functions.artifactSigner.functionName);
+    functions.clientBff.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: [
+          "cognito-idp:ListUsers",
+          "cognito-idp:AdminInitiateAuth",
+          "cognito-idp:AdminRespondToAuthChallenge",
+          "cognito-idp:AdminCreateUser",
+          "cognito-idp:AdminDisableUser",
+          "cognito-idp:AdminGetUser",
+        ],
+        resources: [identity.clientUserPool.userPoolArn, identity.adminUserPool.userPoolArn],
+      }),
+    );
     identity.clientSecret.grantRead(functions.clientBff);
     keys.application.grantEncryptDecrypt(functions.clientBff);
     keys.application.grantEncryptDecrypt(functions.adminApi);
@@ -304,7 +323,7 @@ export class PortalStack extends Stack {
       userPoolClientName: `${prefix}-client-bff`,
       generateSecret: true,
       preventUserExistenceErrors: true,
-      authFlows: { userSrp: false, userPassword: false, adminUserPassword: false },
+      authFlows: { userSrp: false, userPassword: false, adminUserPassword: true },
       accessTokenValidity: Duration.minutes(15),
       idTokenValidity: Duration.minutes(15),
       refreshTokenValidity: Duration.days(7),
@@ -357,6 +376,22 @@ export class PortalStack extends Stack {
         logoutUrls: [config.adminCliLogoutUrl],
       },
     });
+    const adminWebClient = adminUserPool.addClient("AdminWebAppClient", {
+      userPoolClientName: `${prefix}-admin-web`,
+      generateSecret: false,
+      preventUserExistenceErrors: true,
+      authFlows: { userSrp: true, adminUserPassword: true },
+      accessTokenValidity: Duration.minutes(15),
+      idTokenValidity: Duration.minutes(15),
+      refreshTokenValidity: Duration.hours(8),
+      enableTokenRevocation: true,
+      oAuth: {
+        flows: { authorizationCodeGrant: true },
+        scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL],
+        callbackUrls: [`${config.portalOrigin}/bff/auth/admin/callback`],
+        logoutUrls: [`${config.portalOrigin}/logged-out`],
+      },
+    });
     new cognito.CfnUserPoolGroup(this, "AdminGroup", {
       userPoolId: adminUserPool.userPoolId,
       groupName: "bdr-admins",
@@ -370,6 +405,7 @@ export class PortalStack extends Stack {
       clientDomain,
       adminUserPool,
       adminClient,
+      adminWebClient,
       adminDomain,
     };
   }
@@ -409,7 +445,10 @@ export class PortalStack extends Stack {
       });
     };
 
-    const clientBff = createFunction("ClientBffFunction", "client-bff", { entry: clientBffEntry });
+    const clientBff = createFunction("ClientBffFunction", "client-bff", {
+      entry: clientBffEntry,
+      timeout: Duration.seconds(30),
+    });
     const adminApi = createFunction("AdminApiFunction", "admin-api", { entry: adminApiEntry });
     const artifactSigner = createFunction("ArtifactSignerFunction", "artifact-signer", { entry: artifactSignerEntry });
     const uploadPresigner = createFunction("UploadPresignerFunction", "upload-presigner", { entry: uploadPresignerEntry });
@@ -430,6 +469,7 @@ export class PortalStack extends Stack {
 
     this.addDynamoPolicy(clientBff, [tables.identity, tables.tenantData], [
       "GetItem",
+      "PutItem",
       "Query",
       "UpdateItem",
     ]);
@@ -447,6 +487,39 @@ export class PortalStack extends Stack {
       ["TransactWriteItems"],
     );
     this.addDynamoPolicy(clientBff, [tables.identity, tables.tenantData], ["ConditionCheckItem"]);
+    clientBff.addEnvironment("DATA_BUCKET_NAME", "bdr-roofus-uploads");
+    artifactSigner.addEnvironment("DATA_BUCKET_NAME", "bdr-roofus-uploads");
+    clientBff.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["s3:GetObject", "s3:PutObject"],
+        resources: [
+          "arn:aws:s3:::bdr-roofus-uploads/reportgen_portal/*",
+          "arn:aws:s3:::bdr-roofus-uploads/*/reportgen/client_portal/*",
+          "arn:aws:s3:::bdr-roofus-uploads/*/reportgen/aerial/*",
+          "arn:aws:s3:::bdr-roofus-uploads/*/general_data.json",
+          "arn:aws:s3:::bdr-roofus-uploads/*/capital_plan.json",
+          "arn:aws:s3:::bdr-roofus-uploads/*/reportgen/takeoff/asbuilt.*",
+          "arn:aws:s3:::bdr-roofus-uploads/*/gnss_session.json",
+          "arn:aws:s3:::bdr-roofus-uploads/*/session_config.json",
+          "arn:aws:s3:::bdr-roofus-uploads/*/manifest.json",
+        ],
+      }),
+    );
+    clientBff.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["s3:ListBucket"],
+        resources: ["arn:aws:s3:::bdr-roofus-uploads"],
+        conditions: {
+          StringLike: { "s3:prefix": ["", "*/", "reportgen_portal/*"] },
+        },
+      }),
+    );
+    artifactSigner.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["s3:GetObject"],
+        resources: ["arn:aws:s3:::bdr-roofus-uploads/*/reportgen/client_portal/approved/*"],
+      }),
+    );
     clientBff.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ["lambda:InvokeFunction"],

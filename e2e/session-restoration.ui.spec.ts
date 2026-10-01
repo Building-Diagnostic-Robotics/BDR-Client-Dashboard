@@ -14,7 +14,7 @@ async function mockAccount(page: Page) {
       return;
     }
     if (path === "/bff/auth/session") await route.fulfill({ json: { authenticated: true } });
-    else if (path === "/bff/me") await route.fulfill({ json: { organization: { displayName: state.organization } } });
+    else if (path === "/bff/me") await route.fulfill({ json: { organization: { displayName: state.organization }, admin: false } });
     else if (path === "/bff/me/projects") await route.fulfill({ json: { items: [{
       projectId: "project_0123456789abcdef", displayName: state.building,
       address: "Test Address", timeZone: "America/New_York", latestInspection: null, latestReportUpdate: null,

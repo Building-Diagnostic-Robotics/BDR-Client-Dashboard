@@ -160,7 +160,7 @@ describe("client BFF routes", () => {
       expect(response.headers?.location).toBeUndefined();
       expect(response.cookies).toBeUndefined();
       expect(response.body).toContain("Please sign in again");
-      expect(response.body).toContain("/bff/auth/login?returnTo=%2Fprojects");
+      expect(response.body).toContain("/sign-in?returnTo=%2Fprojects");
       expect(response.body).not.toContain("private-code");
       expect(response.body).not.toContain("private-state");
       expect(response.body).not.toContain("evil.example.com");
@@ -254,7 +254,7 @@ describe("client BFF routes", () => {
   });
 
   it("serves client-safe identity metadata from the authenticated context", async () => {
-    const me = vi.fn(() => ({ organization: { displayName: "Midland Holdings" } }));
+    const me = vi.fn(() => ({ organization: { displayName: "Midland Holdings" }, admin: false }));
     const resources = {
       policy: {
         loadActiveClientContext: vi.fn(async () => ({
@@ -279,7 +279,9 @@ describe("client BFF routes", () => {
     expect(response.statusCode).toBe(200);
     expect(JSON.parse(response.body ?? "{}")).toEqual({
       organization: { displayName: "Midland Holdings" },
+      admin: false,
     });
+    expect(me).toHaveBeenCalledWith(expect.anything(), false);
     expect(response.body).not.toContain(identity.userId);
     expect(response.body).not.toContain(identity.organizationId);
   });

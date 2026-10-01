@@ -102,7 +102,10 @@ describe("portal infrastructure", () => {
   it("separates client and TOTP-required administrator identity", () => {
     const rendered = template();
     rendered.resourceCountIs("AWS::Cognito::UserPool", 2);
-    rendered.resourceCountIs("AWS::Cognito::UserPoolClient", 2);
+    rendered.resourceCountIs("AWS::Cognito::UserPoolClient", 3);
+    rendered.hasResourceProperties("AWS::Cognito::UserPoolClient", {
+      ClientName: "bdr-portal-development-admin-web",
+    });
     rendered.resourceCountIs("AWS::Cognito::UserPoolDomain", 2);
     rendered.resourceCountIs("AWS::Cognito::UserPoolGroup", 1);
     rendered.hasResourceProperties("AWS::Cognito::UserPool", {

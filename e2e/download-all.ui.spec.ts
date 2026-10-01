@@ -27,7 +27,7 @@ test("downloads current inspection reports as a ZIP from the regional S3 host", 
     if (path === "/bff/auth/session") {
       await route.fulfill({ json: { authenticated: true } });
     } else if (path === "/bff/me") {
-      await route.fulfill({ json: { organization: { displayName: "Test Organization" } } });
+      await route.fulfill({ json: { organization: { displayName: "Test Organization" }, admin: false } });
     } else if (path === `/bff/projects/${projectId}`) {
       await route.fulfill({ json: {
         projectId, displayName: "Sample Building", address: "Test Address", timeZone: "America/New_York",

@@ -61,9 +61,9 @@ export function secureCookie(
     `${name}=${value}`,
     "Path=/",
     `Max-Age=${options.maxAgeSeconds}`,
-    "Secure",
     `SameSite=${options.sameSite}`,
   ];
+  if (!(process.env.PORTAL_ORIGIN ?? "").startsWith("http://")) attributes.push("Secure");
   if (options.httpOnly) attributes.push("HttpOnly");
   return attributes.join("; ");
 }

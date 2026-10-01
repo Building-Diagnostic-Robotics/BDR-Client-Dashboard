@@ -50,7 +50,7 @@ export function getClient<T>(path: string, schema: Schema<T>): Promise<T> {
 }
 
 export function postClient<T>(path: string, body: unknown, schema: Schema<T>): Promise<T> {
-  const csrfToken = cookie("__Host-bdr_csrf");
+  const csrfToken = cookie("__Host-bdr_csrf") ?? cookie("bdr_csrf");
   if (!csrfToken) throw new ClientApiError(401, "Your session has expired.");
   return request(path, schema, {
     method: "POST",
@@ -66,5 +66,5 @@ export function loginPath(returnTo: string): string {
   const safeReturnTo = returnTo.startsWith("/") && !returnTo.startsWith("//")
     ? returnTo
     : "/projects";
-  return `/bff/auth/login?returnTo=${encodeURIComponent(safeReturnTo)}`;
+  return `/sign-in?returnTo=${encodeURIComponent(safeReturnTo)}`;
 }

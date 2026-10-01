@@ -109,7 +109,19 @@ export function PortalShell({ children }: { children: ReactNode }) {
             <Image src="/bdr_cropped.png" alt="Building Diagnostic Robotics" width={90} height={36} priority />
           </Link>
           <nav className="site-nav" aria-label="Primary navigation">
-            <Link href="/projects">Projects</Link>
+            {me.admin ? (
+              <>
+                <Link href="/projects">Clients</Link>
+                <Link href="/review">Review</Link>
+                <Link href="/admin-tools">Organization tools</Link>
+                <Link href="/how-to/admin">How to use</Link>
+              </>
+            ) : (
+              <>
+                <Link href="/projects">Buildings</Link>
+                <Link href="/how-to">How to use</Link>
+              </>
+            )}
           </nav>
           <div className="account-area">
             <span className="organization-name">{me.organization.displayName}</span>

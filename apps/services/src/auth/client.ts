@@ -96,6 +96,7 @@ export interface ClientOAuth {
     state: string;
     nonce: string;
     codeChallenge: string;
+    loginHint?: string;
   }): string;
   exchangeCode(code: string, codeVerifier: string): Promise<ClientTokenSet>;
   refresh(refreshToken: string): Promise<ClientTokenSet>;
@@ -137,9 +138,14 @@ export class ClientAuthService {
     private readonly cipher: TokenCipher,
     private readonly oauth: ClientOAuth,
     private readonly now: () => Date = () => new Date(),
+    private readonly alternate?: { issuer: string; oauth: ClientOAuth },
   ) {}
 
-  async startLogin(returnToInput?: string): Promise<StartedLogin> {
+  private oauthFor(issuer: string): ClientOAuth {
+    return this.alternate && this.alternate.issuer === issuer ? this.alternate.oauth : this.oauth;
+  }
+
+  async startLogin(returnToInput?: string, loginHint?: string): Promise<StartedLogin> {
     const state = randomToken();
     const nonce = randomToken();
     const verifier = randomToken(48);
@@ -159,6 +165,7 @@ export class ClientAuthService {
         state,
         nonce,
         codeChallenge: sha256Base64Url(verifier),
+        ...(loginHint ? { loginHint } : {}),
       }),
     };
   }
@@ -168,7 +175,7 @@ export class ClientAuthService {
     state: string | undefined;
     loginCookie: string | undefined;
     requestId: string;
-  }): Promise<EstablishedClientSession> {
+  }, onVerified?: (verified: VerifiedClientTokens, tokens: ClientTokenSet) => Promise<void>): Promise<EstablishedClientSession> {
     if (!input.code) rejectLogin(input.requestId, "authorization_code_missing");
     if (!input.state) rejectLogin(input.requestId, "oauth_state_missing");
     if (!input.loginCookie) rejectLogin(input.requestId, "login_cookie_missing");
@@ -190,9 +197,34 @@ export class ClientAuthService {
       if (!tokens.refreshToken || !tokens.idToken) authenticationRequired();
       tokenStage = "token_verification";
       verified = await this.oauth.verifyInitial(tokens, login.nonce);
-    } catch {
+      if (onVerified) await onVerified(verified, tokens);
+    } catch (error) {
+      console.warn(JSON.stringify({
+        requestId: input.requestId,
+        error: "client_login_rejected_detail",
+        reason: tokenStage,
+        message: error instanceof Error ? error.message : "unknown",
+      }));
       rejectLogin(input.requestId, tokenStage);
     }
+    return this.establishVerifiedSession({
+      verified,
+      tokens,
+      returnTo: login.returnTo,
+      requestId: input.requestId,
+      state: input.state,
+    });
+  }
+
+  async establishVerifiedSession(input: {
+    verified: VerifiedClientTokens;
+    tokens: ClientTokenSet;
+    returnTo: string;
+    requestId: string;
+    state: string;
+  }): Promise<EstablishedClientSession> {
+    const now = this.now();
+    const { verified, tokens } = input;
     let identity = await this.store.getClientIdentity(
       identityKeys.subject(verified.issuer, verified.sub),
       { consistentRead: true },
@@ -245,7 +277,7 @@ export class ClientAuthService {
       identity,
       requestId: input.requestId,
     });
-    return { rawSessionId, csrfToken, session, identity, returnTo: login.returnTo };
+    return { rawSessionId, csrfToken, session, identity, returnTo: input.returnTo };
   }
 
   async authenticate(
@@ -266,8 +298,9 @@ export class ClientAuthService {
       let verified: VerifiedClientTokens;
       try {
         const refreshToken = await this.cipher.decrypt(session.refreshTokenCiphertext);
-        refreshed = await this.oauth.refresh(refreshToken);
-        verified = await this.oauth.verifyRefresh(refreshed, session.issuer, session.sub);
+        const oauth = this.oauthFor(session.issuer);
+        refreshed = await oauth.refresh(refreshToken);
+        verified = await oauth.verifyRefresh(refreshed, session.issuer, session.sub);
       } catch {
         authenticationRequired();
       }
@@ -335,7 +368,7 @@ export class ClientAuthService {
       requestId,
     });
     try {
-      await this.oauth.revoke(await this.cipher.decrypt(session.refreshTokenCiphertext));
+      await this.oauthFor(session.issuer).revoke(await this.cipher.decrypt(session.refreshTokenCiphertext));
     } catch {
       console.warn(
         JSON.stringify({
@@ -344,7 +377,7 @@ export class ClientAuthService {
         }),
       );
     }
-    return this.oauth.logoutUrl();
+    return this.oauthFor(session.issuer).logoutUrl();
   }
 }
 
