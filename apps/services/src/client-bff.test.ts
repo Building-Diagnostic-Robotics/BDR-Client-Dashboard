@@ -254,7 +254,7 @@ describe("client BFF routes", () => {
   });
 
   it("serves client-safe identity metadata from the authenticated context", async () => {
-    const me = vi.fn(() => ({ organization: { displayName: "Midland Holdings" }, admin: false }));
+    const me = vi.fn(() => ({ organization: { displayName: "Midland Holdings" } }));
     const resources = {
       policy: {
         loadActiveClientContext: vi.fn(async () => ({
@@ -279,7 +279,6 @@ describe("client BFF routes", () => {
     expect(response.statusCode).toBe(200);
     expect(JSON.parse(response.body ?? "{}")).toEqual({
       organization: { displayName: "Midland Holdings" },
-      admin: false,
     });
     expect(me).toHaveBeenCalledWith(expect.anything(), false);
     expect(response.body).not.toContain(identity.userId);

@@ -84,7 +84,8 @@ export class ClientResourceService {
   me(context: ClientContext, admin = false) {
     return clientResponse(clientMeResponseSchema, {
       organization: { displayName: context.organization.displayName },
-      admin,
+      // The published dashboard schema rejects unknown keys. Omit this for clients.
+      ...(admin ? { admin: true } : {}),
     });
   }
 

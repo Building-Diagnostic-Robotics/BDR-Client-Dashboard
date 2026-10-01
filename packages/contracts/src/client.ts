@@ -15,7 +15,7 @@ export const clientMeResponseSchema = z.object({
   organization: z.object({
     displayName: z.string().trim().min(1).max(200),
   }).strict(),
-  admin: z.boolean(),
+  admin: z.boolean().optional(),
 }).strict();
 
 export const clientProjectInspectionSummarySchema = z.object({
