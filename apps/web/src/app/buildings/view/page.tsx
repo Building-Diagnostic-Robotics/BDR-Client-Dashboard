@@ -9,6 +9,17 @@ import { getClient, postClient } from "../../../lib/client-api";
 
 type Status = Record<string, unknown>;
 
+type HistoryItem = {
+  reportType?: string | undefined;
+  key?: string | undefined;
+  approvedKey?: string | undefined;
+  label?: string | undefined;
+  stale?: boolean | undefined;
+  at?: string | undefined;
+  generatedAt?: string | undefined;
+  reportgenApprovedAt?: string | undefined;
+};
+
 const asStatus = { parse(value: unknown): Status { return (value ?? {}) as Status; } };
 const asOk = { parse(value: unknown) { return value; } };
 const asUpload = { parse(value: unknown) { return value as { url: string }; } };
@@ -32,11 +43,11 @@ function Aerial({ prefix }: { prefix: string }) {
 }
 
 function BuildingView() {
-  const { organization } = usePortal();
+  const { admin: portalAdmin } = usePortal();
   const params = useSearchParams();
   const prefix = params.get("prefix") || "";
   const [status, setStatus] = useState<Status | null>(null);
-  const admin = organization.organizationId === "bdr_portal_admins" || Boolean(status?.admin);
+  const admin = Boolean(portalAdmin) || Boolean(status?.admin);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -155,9 +166,9 @@ function BuildingView() {
         )}
       </section>
       {(() => {
-        const stored = (Array.isArray(status?.history) ? status.history : []) as Array<{ reportType?: string; key?: string; approvedKey?: string; label?: string; stale?: boolean; at?: string; generatedAt?: string; reportgenApprovedAt?: string }>;
+        const stored = (Array.isArray(status?.history) ? status.history : []) as HistoryItem[];
         const seen = new Set(stored.map((item) => item.key || item.approvedKey));
-        const history = [
+        const history: HistoryItem[] = [
           ...stored,
           ...reportRows
             .filter(([, report]) => report.stale && report.approvedKey && !seen.has(report.approvedKey))

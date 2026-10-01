@@ -17,7 +17,7 @@ function MapView() {
   const [anomalyType, setAnomalyType] = useState("");
   const [aerial, setAerial] = useState<string | null>(null);
   const [moistureUrl, setMoistureUrl] = useState<string | null>(null);
-  const [features, setFeatures] = useState<Array<{ type?: string; severity?: string; section?: string }>>([]);
+  const [features, setFeatures] = useState<Array<{ type?: string | undefined; severity?: string | undefined; section?: string | undefined }>>([]);
   useEffect(() => {
     if (!prefix) return;
     const root = prefix.replace(/\/?$/, "/");
