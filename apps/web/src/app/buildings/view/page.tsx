@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 
 import { usePortal } from "../../../components/portal-shell";
-import { getClient, postClient } from "../../../lib/client-api";
+import { ClientApiError, getClient, postClient } from "../../../lib/client-api";
 
 type Status = Record<string, unknown>;
 
@@ -59,30 +59,45 @@ function BuildingView() {
   }, [prefix]);
 
   async function approve(reportType: string) {
-    setError(null);
-    try {
-      await postClient("/bff/portal/building", { prefix, action: "approve", reportType }, asOk);
-      const next = await getClient(`/bff/portal/building?prefix=${encodeURIComponent(prefix)}`, asStatus);
-      setStatus(next);
-    } catch {
-      setError("This account cannot approve the report.");
-    }
+    await mutateBuilding(
+      { prefix, action: "approve", reportType },
+      "This account cannot approve the report.",
+    );
   }
 
   async function setStale(reportType: string, action: "mark-stale" | "undo-stale") {
-    setError(null);
-    try {
-      await postClient("/bff/portal/building", { prefix, action, reportType }, asOk);
-      const next = await getClient(`/bff/portal/building?prefix=${encodeURIComponent(prefix)}`, asStatus);
-      setStatus(next);
-    } catch {
-      setError(action === "undo-stale" ? "This stale mark could not be undone." : "This report could not be marked stale.");
-    }
+    await mutateBuilding(
+      { prefix, action, reportType },
+      action === "undo-stale" ? "This stale mark could not be undone." : "This report could not be marked stale.",
+    );
   }
 
   async function reload() {
     const next = await getClient(`/bff/portal/building?prefix=${encodeURIComponent(prefix)}`, asStatus);
     setStatus(next);
+  }
+
+  async function mutationFailed(reason: unknown, fallback: string): Promise<void> {
+    if (reason instanceof ClientApiError && reason.status === 409) {
+      try {
+        await reload();
+      } catch {
+        // Keep the conflict message: the user still needs to reload before retrying.
+      }
+      setError(reason.message);
+      return;
+    }
+    setError(fallback);
+  }
+
+  async function mutateBuilding(body: Record<string, unknown>, fallback: string): Promise<void> {
+    setError(null);
+    try {
+      await postClient("/bff/portal/building", body, asOk);
+      await reload();
+    } catch (reason) {
+      await mutationFailed(reason, fallback);
+    }
   }
 
   const reports = (status?.reports ?? {}) as Record<string, { clientVisible?: boolean; stale?: boolean; approvedKey?: string; awaitingClientAdmin?: boolean; generatedAt?: string }>;
@@ -196,14 +211,20 @@ function BuildingView() {
               <div className="history-controls__restore">
                 <p>Hidden from clients{status.historyHideReason ? `: ${String(status.historyHideReason)}` : ""}. Clients see this section with no history.</p>
                 <button className="button button--outline" type="button" onClick={() => {
-                  void postClient("/bff/portal/building", { prefix, action: "restore-history" }, asOk).then(reload);
+                  void mutateBuilding(
+                    { prefix, action: "restore-history" },
+                    "Report history could not be restored.",
+                  );
                 }}>Restore</button>
               </div>
             ) : (
               <form className="history-controls__form" onSubmit={(event) => {
                 event.preventDefault();
                 const reason = String(new FormData(event.currentTarget).get("reason") || "");
-                void postClient("/bff/portal/building", { prefix, action: "hide-history", reason }, asOk).then(reload);
+                void mutateBuilding(
+                  { prefix, action: "hide-history", reason },
+                  "Report history could not be hidden.",
+                );
               }}>
                 <label>Reason
                   <input name="reason" required placeholder="Superseded scan" />
@@ -241,11 +262,11 @@ function BuildingView() {
                         className="button button--outline"
                         type="button"
                         onClick={() => {
-                          void postClient("/bff/portal/building", {
+                          void mutateBuilding({
                             prefix,
                             action: item.hiddenFromClients ? "restore-history-item" : "hide-history-item",
                             key,
-                          }, asOk).then(reload);
+                          }, "This history item could not be updated.");
                         }}
                       >
                         {item.hiddenFromClients ? "Restore" : "Hide from clients"}
@@ -271,7 +292,10 @@ function BuildingView() {
                 value={String(status?.buildingMark || "")}
                 onChange={(event) => {
                   const mark = event.target.value || null;
-                  void postClient("/bff/portal/building", { prefix, action: "building-mark", mark }, asOk).then(reload);
+                  void mutateBuilding(
+                    { prefix, action: "building-mark", mark },
+                    "The visit status could not be saved.",
+                  );
                 }}
               >
                 <option value="">Normal visit</option>
@@ -286,13 +310,13 @@ function BuildingView() {
         <form className="surface form-grid" onSubmit={(event) => {
           event.preventDefault();
           const form = new FormData(event.currentTarget);
-          void postClient("/bff/portal/building", {
+          void mutateBuilding({
             prefix,
             action: "takeoff-building",
             clientPrefix: prefix.split("/")[0],
             displayName: String(form.get("name") || ""),
             address: String(form.get("address") || ""),
-          }, asOk);
+          }, "The roof takeoff request could not be created.");
         }}>
           <h2>Request roof takeoff</h2>
           <label>Name<input name="name" required /></label>
@@ -308,13 +332,13 @@ function BuildingView() {
         <form className="form-grid" key={String(status?.updatedAt || "building")} onSubmit={(event) => {
           event.preventDefault();
           const form = new FormData(event.currentTarget);
-          void postClient("/bff/portal/building", {
+          void mutateBuilding({
             prefix,
             action: "identity",
             displayName: String(form.get("displayName") || ""),
             address: String(form.get("address") || ""),
             engineers: String(form.get("engineers") || ""),
-          }, asOk).then(reload).catch(() => setError("Building details could not be saved."));
+          }, "Building details could not be saved.");
         }}>
           <label>Name<input name="displayName" defaultValue={String(status?.displayName || "")} /></label>
           <label>Location<input name="address" defaultValue={String(status?.address || "")} /></label>
@@ -329,7 +353,7 @@ function BuildingView() {
           <form className="form-grid" onSubmit={(event) => {
             event.preventDefault();
             const form = new FormData(event.currentTarget);
-            void postClient("/bff/portal/building", {
+            void mutateBuilding({
               prefix,
               action: "capital-plan",
               inputs: {
@@ -339,7 +363,7 @@ function BuildingView() {
                 replacement_cost_per_sqft: Number(form.get("replacement_cost_per_sqft")),
                 new_roof_service_life_years: Number(form.get("new_roof_service_life_years")),
               },
-            }, asOk).then(reload).catch(() => setError("Capital planning could not be saved."));
+            }, "Capital planning could not be saved.");
           }}>
             <label>Start year<input name="plan_start_year" type="number" required /></label>
             <label>Years<input name="plan_years" type="number" required /></label>
@@ -376,7 +400,10 @@ function BuildingView() {
                       value={section.mark || ""}
                       onChange={(event) => {
                         const mark = event.target.value || null;
-                        void postClient("/bff/portal/building", { prefix, action: "section-mark", sectionId: section.sectionId, mark }, asOk).then(reload);
+                        void mutateBuilding(
+                          { prefix, action: "section-mark", sectionId: section.sectionId, mark },
+                          "The scan status could not be saved.",
+                        );
                       }}
                     >
                       <option value="">Included</option>
@@ -404,7 +431,12 @@ function BuildingView() {
               });
           }} />
           {admin && status?.asBuiltKey ? (
-            <button className="button button--outline" type="button" onClick={() => postClient("/bff/portal/building", { prefix, action: "reject-asbuilt" }, asOk).then(reload)}>Reject this image</button>
+            <button className="button button--outline" type="button" onClick={() => {
+              void mutateBuilding(
+                { prefix, action: "reject-asbuilt" },
+                "The as-built image could not be rejected.",
+              );
+            }}>Reject this image</button>
           ) : null}
         </div>
       </details>

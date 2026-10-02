@@ -61,6 +61,13 @@ function service() {
       identity,
       returnTo: "/",
     })),
+    establishVerifiedSession: vi.fn(async () => ({
+      rawSessionId: "session-id",
+      csrfToken: csrf,
+      session,
+      identity,
+      returnTo: "/projects",
+    })),
     logout: vi.fn(async () => "https://auth.example.com/logout"),
   };
 }
@@ -283,5 +290,36 @@ describe("client BFF routes", () => {
     expect(me).toHaveBeenCalledWith(expect.anything(), false);
     expect(response.body).not.toContain(identity.userId);
     expect(response.body).not.toContain(identity.organizationId);
+  });
+
+  it("returns an explicit conflict response for stale conditional writes", async () => {
+    const resources = {
+      policy: {
+        loadActiveClientContext: vi.fn(async () => ({
+          userId: identity.userId,
+          organization: {
+            organizationId: identity.organizationId,
+            displayName: "Midland Holdings",
+            status: "ACTIVE",
+          },
+        })),
+      },
+      me: vi.fn(() => {
+        throw new DomainError("CONFLICT", "Reload and review the latest version.");
+      }),
+    } as never;
+    const handler = createClientBffHandler({
+      portalOrigin: "https://portal.example.com",
+      service: service(),
+      resources,
+    });
+
+    const response = await handler(event("GET", "/bff/me"));
+
+    expect(response.statusCode).toBe(409);
+    expect(JSON.parse(response.body ?? "{}")).toEqual({
+      error: "conflict",
+      message: "Reload and review the latest version.",
+    });
   });
 });

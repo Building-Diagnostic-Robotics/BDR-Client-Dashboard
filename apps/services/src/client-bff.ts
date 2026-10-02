@@ -20,7 +20,7 @@ import {
 import { JSON_HEADERS, clearCookie, json, redirect, requestId, secureCookie } from "./shared/http";
 import { ClientResourceService } from "./client/resources";
 import { emailBlocked } from "./portal/email";
-import { allowedClientKey, clientCanSee, commitHowToRead, createClientAccount, createPortalAdmin, grantPortalAdmin, howToReadFor, howToReadUpload, linkClient, listClientUsers, listLinkedClients, listPortalBuildings, listUnlinkedFolders, loadPortalStatus, ownsPrefix, PORTAL_ADMIN_ORGANIZATION_ID, renameClient, replaceClientEmail, reportFileMatches, resendClientInvite, revokeClientUser, savePortalStatus, signedRead, signedUpload } from "./portal/buildings";
+import { allowedClientKey, clientCanSee, commitHowToRead, createClientAccount, createPortalAdmin, grantPortalAdmin, howToReadFor, howToReadUpload, linkClient, listClientUsers, listLinkedClients, listPortalBuildings, listUnlinkedFolders, loadPortalStatus, loadPortalStatusVersion, ownsPrefix, PORTAL_ADMIN_ORGANIZATION_ID, renameClient, replaceClientEmail, reportFileMatches, resendClientInvite, revokeClientUser, savePortalStatus, signedRead, signedUpload } from "./portal/buildings";
 
 const cognito = new CognitoIdentityProviderClient({});
 const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60;
@@ -103,10 +103,23 @@ function errorResponse(
   event: APIGatewayProxyEventV2,
 ): APIGatewayProxyStructuredResultV2 {
   if (error instanceof DomainError) {
-    const statusCode = error.code === "AUTHENTICATION_REQUIRED" ? 401 : error.code === "NOT_FOUND" ? 404 : 403;
+    const statusCode = error.code === "AUTHENTICATION_REQUIRED"
+      ? 401
+      : error.code === "NOT_FOUND"
+        ? 404
+        : error.code === "CONFLICT"
+          ? 409
+          : 403;
+    const errorCode = statusCode === 401
+      ? "authentication_required"
+      : statusCode === 404
+        ? "not_found"
+        : statusCode === 409
+          ? "conflict"
+          : "access_denied";
     return json(
       statusCode,
-      { error: statusCode === 401 ? "authentication_required" : statusCode === 404 ? "not_found" : "access_denied" },
+      { error: errorCode, ...(statusCode === 409 ? { message: error.message } : {}) },
       {
         headers: { "x-request-id": requestId(event) },
         ...(statusCode === 401 ? { cookies: clearClientCookies } : {}),
@@ -138,6 +151,7 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
           mfaSession?: string;
           newPassword?: string;
         };
+        const adminPoolId = dependencies.adminIssuer?.split("/").pop();
         try {
           const result = await passwordLogin({
             email: body.email ?? "",
@@ -145,7 +159,7 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
             ...(body.mfaCode ? { mfaCode: body.mfaCode } : {}),
             ...(body.mfaSession ? { mfaSession: body.mfaSession } : {}),
             ...(body.newPassword ? { newPassword: body.newPassword } : {}),
-            ...(dependencies.adminIssuer ? { adminPoolId: dependencies.adminIssuer.split("/").pop() } : {}),
+            ...(adminPoolId ? { adminPoolId } : {}),
             ...(process.env.ADMIN_APP_CLIENT_ID ? { adminClientId: process.env.ADMIN_APP_CLIENT_ID } : {}),
             ...(process.env.CLIENT_USER_POOL_ID ? { clientPoolId: process.env.CLIENT_USER_POOL_ID } : {}),
             ...(process.env.CLIENT_APP_CLIENT_ID ? { clientClientId: process.env.CLIENT_APP_CLIENT_ID } : {}),
@@ -465,7 +479,8 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
           assertMutationRequest(event, dependencies.portalOrigin, active.session.csrfTokenHash);
           const payload = JSON.parse(event.body ?? "{}") as Record<string, unknown>;
           const prefix = String(payload.prefix || "");
-          const status = await loadPortalStatus(prefix);
+          const statusSnapshot = await loadPortalStatusVersion(prefix);
+          const status = statusSnapshot.status;
           if (!(await ownsPrefix(organizationId, admin, prefix))) return json(404, { error: "not_found" });
           const action = String(payload.action || "");
           if (action === "approve" && admin) {
@@ -506,7 +521,7 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
                 ContentType: "application/json",
               }));
             }
-            await savePortalStatus(prefix, status);
+            await savePortalStatus(prefix, status, statusSnapshot.eTag);
             return json(200, { ok: true });
           }
           if (action === "notes" && admin) {
@@ -523,7 +538,7 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
                 report.stale = true;
               }
             }
-            await savePortalStatus(prefix, status);
+            await savePortalStatus(prefix, status, statusSnapshot.eTag);
             return json(200, { ok: true });
           }
           if (action === "section-mark") {
@@ -532,7 +547,7 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
             if (payload.mark) marks[sectionId] = String(payload.mark);
             else delete marks[sectionId];
             status.marks = marks;
-            await savePortalStatus(prefix, status);
+            await savePortalStatus(prefix, status, statusSnapshot.eTag);
             return json(200, { ok: true });
           }
           if (action === "hide-history" && admin) {
@@ -540,13 +555,13 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
             if (!reason) return json(400, { error: "invalid_request" });
             status.historyHidden = true;
             status.historyHideReason = reason;
-            await savePortalStatus(prefix, status);
+            await savePortalStatus(prefix, status, statusSnapshot.eTag);
             return json(200, { ok: true });
           }
           if (action === "restore-history" && admin) {
             status.historyHidden = false;
             status.historyHideReason = null;
-            await savePortalStatus(prefix, status);
+            await savePortalStatus(prefix, status, statusSnapshot.eTag);
             return json(200, { ok: true });
           }
           if (action === "hide-history-item" && admin) {
@@ -555,14 +570,14 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
             const keys = hiddenHistoryKeys(status);
             if (!keys.includes(key)) keys.push(key);
             status.hiddenHistoryKeys = keys;
-            await savePortalStatus(prefix, status);
+            await savePortalStatus(prefix, status, statusSnapshot.eTag);
             return json(200, { ok: true });
           }
           if (action === "restore-history-item" && admin) {
             const key = String(payload.key || "").trim();
             if (!key) return json(400, { error: "invalid_request" });
             status.hiddenHistoryKeys = hiddenHistoryKeys(status).filter((item) => item !== key);
-            await savePortalStatus(prefix, status);
+            await savePortalStatus(prefix, status, statusSnapshot.eTag);
             return json(200, { ok: true });
           }
           if (action === "building-mark" && admin) {
@@ -571,7 +586,7 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
             if (mark === "no_report" || mark === "test_scan") {
               status.pendingAdminEmail = { kind: "building-mark", mark, buildingPrefix: prefix, sendBlocked: emailBlocked() };
             }
-            await savePortalStatus(prefix, status);
+            await savePortalStatus(prefix, status, statusSnapshot.eTag);
             return json(200, { ok: true });
           }
           if (blockedBuilding(status)) return json(400, { error: "invalid_request" });
@@ -581,7 +596,7 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
             rememberReport(status, String(payload.reportType || ""), report, true);
             report.stale = true;
             report.clientVisible = false;
-            await savePortalStatus(prefix, status);
+            await savePortalStatus(prefix, status, statusSnapshot.eTag);
             return json(200, { ok: true });
           }
           if (action === "undo-stale" && admin) {
@@ -589,7 +604,7 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
             if (!report?.stale) return json(400, { error: "invalid_request" });
             report.stale = false;
             if (report.approvedKey) report.clientVisible = true;
-            await savePortalStatus(prefix, status);
+            await savePortalStatus(prefix, status, statusSnapshot.eTag);
             return json(200, { ok: true });
           }
           if (action === "capital-plan") {
@@ -608,7 +623,7 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
               if (!visibleReport(status, "CAPITAL_PLAN")) return json(400, { error: "invalid_request" });
               markEditedReportsStale(status, "CAPITAL_PLAN");
             }
-            await savePortalStatus(prefix, status);
+            await savePortalStatus(prefix, status, statusSnapshot.eTag);
             return json(200, { ok: true });
           }
           if (action === "identity") {
@@ -631,7 +646,7 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
               if (!anyVisible(status)) return json(400, { error: "invalid_request" });
               markEditedReportsStale(status);
             }
-            await savePortalStatus(prefix, status);
+            await savePortalStatus(prefix, status, statusSnapshot.eTag);
             return json(200, { ok: true });
           }
           if (action === "reject-asbuilt" && admin) {
@@ -643,7 +658,7 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
             }
             status.asBuiltRejected = true;
             status.pendingAdminEmail = { kind: "as-built-rejected", buildingPrefix: prefix };
-            await savePortalStatus(prefix, status);
+            await savePortalStatus(prefix, status, statusSnapshot.eTag);
             return json(200, { ok: true });
           }
           if (action === "asbuilt-upload") {
@@ -674,7 +689,7 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
               Body: JSON.stringify({ displayName: name, address: fresh.address }),
               ContentType: "application/json",
             }));
-            await savePortalStatus(created, fresh);
+            await savePortalStatus(created, fresh, null);
             return json(200, { buildingPrefix: created });
           }
           if (action === "edit-visible") {
@@ -686,7 +701,7 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
             report.rerun = "pdf-only";
             status.pendingRerun = { reportType, mode: "pdf-only" };
             status.clientMessage = "Updating the report. The previous file stays available as stale.";
-            await savePortalStatus(prefix, status);
+            await savePortalStatus(prefix, status, statusSnapshot.eTag);
             return json(200, { ok: true });
           }
           return json(400, { error: "invalid_request" });

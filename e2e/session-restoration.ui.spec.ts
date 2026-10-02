@@ -15,10 +15,20 @@ async function mockAccount(page: Page) {
     }
     if (path === "/bff/auth/session") await route.fulfill({ json: { authenticated: true } });
     else if (path === "/bff/me") await route.fulfill({ json: { organization: { displayName: state.organization }, admin: false } });
-    else if (path === "/bff/me/projects") await route.fulfill({ json: { items: [{
-      projectId: "project_0123456789abcdef", displayName: state.building,
-      address: "Test Address", timeZone: "America/New_York", latestInspection: null, latestReportUpdate: null,
-    }] } });
+    else if (path === "/bff/portal/buildings") await route.fulfill({ json: { items: [{
+      buildingPrefix: "test-client/robot/2026-09-17/test-building/",
+      displayName: state.building,
+      address: "Test Address",
+      scanTime: "2026-09-17T10:00:00-04:00",
+      uploadTime: "2026-09-17T12:00:00-04:00",
+      timeZone: "America/New_York",
+      readyReports: ["ASSESSMENT"],
+      awaitingReports: [],
+      roofTakeoffOnly: false,
+      buildingMark: null,
+      legacy: false,
+      mapReady: false,
+    }], admin: false } });
     else await route.fulfill({ status: 404, json: { error: "not_found" } });
   });
   return state;
@@ -36,7 +46,8 @@ test("a restored dashboard rechecks the session and hides content after logout",
   const initialReads = state.sessionReads;
   state.active = false;
   await restoreFromHistory(page);
-  await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible();
+  await expect(page).toHaveURL(/\/sign-in\?returnTo=%2Fprojects$/);
+  await expect(page.getByRole("heading", { name: "Sign in with your email and password", exact: true })).toBeVisible();
   expect(state.sessionReads).toBe(initialReads + 1);
   await expect(page.getByRole("heading", { name: "Your projects" })).toHaveCount(0);
   await expect(page.getByText("First Test Organization")).toHaveCount(0);

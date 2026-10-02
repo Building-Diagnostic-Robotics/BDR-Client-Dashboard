@@ -26,10 +26,19 @@ async function request<T>(path: string, schema: Schema<T>, init?: RequestInit): 
     },
   });
   if (!response.ok) {
+    let serverMessage: string | undefined;
+    try {
+      const payload = await response.json() as { message?: unknown };
+      if (typeof payload.message === "string") serverMessage = payload.message;
+    } catch {
+      // The status code remains authoritative when an error body is absent or malformed.
+    }
     throw new ClientApiError(
       response.status,
       response.status === 401
         ? "Your session has expired."
+        : response.status === 409
+          ? serverMessage ?? "This information changed. Reload and review it before trying again."
         : "The requested information is unavailable.",
     );
   }

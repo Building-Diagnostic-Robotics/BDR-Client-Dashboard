@@ -37,10 +37,14 @@ async function secretHash(username: string, clientId: string, secretArn: string)
   return createHmac("sha256", clientSecret).update(`${username}${clientId}`).digest("base64");
 }
 
-function tokensFrom(result: { AuthenticationResult?: { AccessToken?: string; RefreshToken?: string; IdToken?: string } }): ClientTokenSet {
-  const accessToken = result.AuthenticationResult?.AccessToken;
-  const refreshToken = result.AuthenticationResult?.RefreshToken;
-  const idToken = result.AuthenticationResult?.IdToken;
+function tokensFrom(result: {
+  AccessToken?: string | undefined;
+  RefreshToken?: string | undefined;
+  IdToken?: string | undefined;
+} | undefined): ClientTokenSet {
+  const accessToken = result?.AccessToken;
+  const refreshToken = result?.RefreshToken;
+  const idToken = result?.IdToken;
   if (!accessToken || !refreshToken || !idToken) throw new Error("Cognito did not return a session");
   return { accessToken, refreshToken, idToken };
 }
@@ -83,7 +87,7 @@ export async function passwordLogin(input: {
         ...(hash ? { SECRET_HASH: hash } : {}),
       },
     }));
-    return { kind: "tokens", admin, tokens: tokensFrom(response) };
+    return { kind: "tokens", admin, tokens: tokensFrom(response.AuthenticationResult) };
   }
   if (input.mfaCode && input.mfaSession) {
     const response = await cognito.send(new AdminRespondToAuthChallengeCommand({
@@ -97,7 +101,7 @@ export async function passwordLogin(input: {
         ...(hash ? { SECRET_HASH: hash } : {}),
       },
     }));
-    return { kind: "tokens", admin, tokens: tokensFrom(response) };
+    return { kind: "tokens", admin, tokens: tokensFrom(response.AuthenticationResult) };
   }
   const started = await cognito.send(new AdminInitiateAuthCommand({
     UserPoolId: userPoolId,
@@ -111,5 +115,5 @@ export async function passwordLogin(input: {
   if (started.ChallengeName === "NEW_PASSWORD_REQUIRED" && started.Session) {
     return { kind: "new-password", session: started.Session };
   }
-  return { kind: "tokens", admin, tokens: tokensFrom(started) };
+  return { kind: "tokens", admin, tokens: tokensFrom(started.AuthenticationResult) };
 }

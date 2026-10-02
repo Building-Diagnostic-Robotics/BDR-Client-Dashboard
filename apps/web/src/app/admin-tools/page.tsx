@@ -27,6 +27,10 @@ function statusLabel(status: string): string {
   return "Signed in";
 }
 
+function conflictMessage(reason: unknown): string | null {
+  return reason instanceof ClientApiError && reason.status === 409 ? reason.message : null;
+}
+
 function ClientWorkspace({ client, onRenamed }: { client: Client; onRenamed: () => void }) {
   const [users, setUsers] = useState<User[]>([]);
   const [name, setName] = useState(client.displayName);
@@ -58,7 +62,11 @@ function ClientWorkspace({ client, onRenamed }: { client: Client; onRenamed: () 
         setError(null);
         void postClient("/bff/portal/client-rename", { clientPrefix: client.clientPrefix, displayName: name }, asOk)
           .then(() => { setMessage("Name saved."); onRenamed(); })
-          .catch(() => setError("The name could not be saved."));
+          .catch((reason) => {
+            const conflict = conflictMessage(reason);
+            if (conflict) onRenamed();
+            setError(conflict ?? "The name could not be saved.");
+          });
       }}>
         <h3>Name</h3>
         <label>Display name
@@ -74,7 +82,14 @@ function ClientWorkspace({ client, onRenamed }: { client: Client; onRenamed: () 
           setError(null);
           void postClient("/bff/portal/client-account", { clientPrefix: client.clientPrefix, email }, asOk)
             .then(() => { setEmail(""); setMessage("Invite sent. Cognito emailed a temporary password."); loadPeople(); })
-            .catch(() => setError("The invite could not be sent."));
+            .catch((reason) => {
+              const conflict = conflictMessage(reason);
+              if (conflict) {
+                loadPeople();
+                onRenamed();
+              }
+              setError(conflict ?? "The invite could not be sent.");
+            });
         }}>
           <label>Email
             <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required placeholder="name@client.com" />
@@ -168,7 +183,11 @@ export default function AdminToolsPage() {
               displayName: String(data.get("name") || ""),
               clientPrefix: String(data.get("folder") || ""),
             }, asOk).then(() => { form.reset(); setSelected(String(data.get("folder") || "")); load(); })
-              .catch(() => setError("The client could not be created. Choose a folder that is not already linked."));
+              .catch((reason) => {
+                const conflict = conflictMessage(reason);
+                if (conflict) load();
+                setError(conflict ?? "The client could not be created. Choose a folder that is not already linked.");
+              });
           }}>
             <h2>Create client</h2>
             <label>Client name

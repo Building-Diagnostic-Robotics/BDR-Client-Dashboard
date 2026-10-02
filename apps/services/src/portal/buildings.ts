@@ -20,6 +20,8 @@ import { DynamoDBDocumentClient, PutCommand, QueryCommand, UpdateCommand } from 
 import { identityKeys, tenantKeys } from "@bdr/domain";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
+import { readJsonObject, writeJsonObject, type JsonObjectSnapshot } from "./json-state";
+
 const s3 = new S3Client({});
 const LINKS_KEY = "reportgen_portal/org_links.json";
 
@@ -44,24 +46,20 @@ function bucket(): string {
   return name;
 }
 
-async function readJson(key: string): Promise<Record<string, unknown>> {
-  try {
-    const body = await s3.send(new GetObjectCommand({ Bucket: bucket(), Key: key }));
-    const text = await body.Body?.transformToString();
-    const data = JSON.parse(text || "{}") as unknown;
-    return data && typeof data === "object" ? data as Record<string, unknown> : {};
-  } catch {
-    return {};
-  }
+async function readJsonVersion(key: string): Promise<JsonObjectSnapshot> {
+  return readJsonObject(s3, bucket(), key);
 }
 
-async function writeJson(key: string, data: Record<string, unknown>): Promise<void> {
-  await s3.send(new PutObjectCommand({
-    Bucket: bucket(),
-    Key: key,
-    Body: JSON.stringify(data, null, 2),
-    ContentType: "application/json",
-  }));
+async function readJson(key: string): Promise<Record<string, unknown>> {
+  return (await readJsonVersion(key)).value;
+}
+
+async function writeJson(
+  key: string,
+  data: Record<string, unknown>,
+  expectedETag: string | null,
+): Promise<void> {
+  await writeJsonObject(s3, bucket(), key, data, expectedETag);
 }
 
 async function listChildren(prefix: string): Promise<string[]> {
@@ -78,16 +76,25 @@ async function listChildren(prefix: string): Promise<string[]> {
 export const PORTAL_ADMIN_ORGANIZATION_ID = "bdr_portal_admins";
 
 export async function grantPortalAdmin(organizationId: string): Promise<void> {
-  const links = await readJson(LINKS_KEY);
+  const snapshot = await readJsonVersion(LINKS_KEY);
+  const links = snapshot.value;
   const admins = Array.isArray(links.portalAdminOrganizationIds) ? links.portalAdminOrganizationIds : [];
-  if (!admins.includes(organizationId)) admins.push(organizationId);
+  let changed = false;
+  if (!admins.includes(organizationId)) {
+    admins.push(organizationId);
+    changed = true;
+  }
   links.portalAdminOrganizationIds = admins;
-  if (!Array.isArray(links.organizations)) links.organizations = [];
-  await writeJson(LINKS_KEY, links);
+  if (!Array.isArray(links.organizations)) {
+    links.organizations = [];
+    changed = true;
+  }
+  if (changed) await writeJson(LINKS_KEY, links, snapshot.eTag);
 }
 
 export async function isPortalAdmin(organizationId: string): Promise<boolean> {
-  const links = await readJson(LINKS_KEY);
+  const snapshot = await readJsonVersion(LINKS_KEY);
+  const links = snapshot.value;
   const admins = Array.isArray(links.portalAdminOrganizationIds) ? links.portalAdminOrganizationIds : [];
   return admins.includes(organizationId);
 }
@@ -126,7 +133,8 @@ function orgForFolder(rows: OrgLink[], folder: string): OrgLink | undefined {
 }
 
 export async function listLinkedClients(): Promise<Array<{ clientPrefix: string; displayName: string; organizationId: string; buildings: number }>> {
-  const links = await readJson(LINKS_KEY);
+  const snapshot = await readJsonVersion(LINKS_KEY);
+  const links = snapshot.value;
   const rows = [];
   for (const org of orgRows(links)) {
     const prefixes = (org.clientPrefixes ?? []).map((item) => item.replace(/\/$/, "")).filter(Boolean);
@@ -161,13 +169,14 @@ export async function linkClient(input: { displayName: string; clientPrefix: str
   const displayName = input.displayName.trim();
   if (!displayName || !clientPrefix || SKIP_PREFIXES.has(clientPrefix)) throw new Error("invalid_request");
   if ((await buildingsUnder(clientPrefix)).length === 0) throw new Error("invalid_request");
-  const links = await readJson(LINKS_KEY);
+  const snapshot = await readJsonVersion(LINKS_KEY);
+  const links = snapshot.value;
   const current = orgRows(links);
   if (orgForFolder(current, clientPrefix)) throw new Error("already_linked");
   const organizationId = organizationIdFor(clientPrefix);
   current.push({ organizationId, displayName, clientPrefixes: [clientPrefix], howToReadHistory: [] });
   links.organizations = current;
-  await writeJson(LINKS_KEY, links);
+  await writeJson(LINKS_KEY, links, snapshot.eTag);
   const tenantTable = process.env.TENANT_DATA_TABLE_NAME;
   if (tenantTable) {
     const dynamo = DynamoDBDocumentClient.from(new DynamoDBClient({}));
@@ -183,14 +192,15 @@ export async function renameClient(clientPrefix: string, displayName: string): P
   const folder = folderOf(clientPrefix);
   const name = displayName.trim();
   if (!folder || !name) throw new Error("invalid_request");
-  const links = await readJson(LINKS_KEY);
+  const snapshot = await readJsonVersion(LINKS_KEY);
+  const links = snapshot.value;
   const current = orgRows(links);
   const org = orgForFolder(current, folder);
   if (!org) throw new Error("not_found");
   org.displayName = name;
   org.organizationId = organizationIdFor(folder);
   links.organizations = current;
-  await writeJson(LINKS_KEY, links);
+  await writeJson(LINKS_KEY, links, snapshot.eTag);
   const table = process.env.TENANT_DATA_TABLE_NAME;
   if (!table) return;
   const dynamo = DynamoDBDocumentClient.from(new DynamoDBClient({}));
@@ -275,7 +285,8 @@ export async function createClientAccount(input: { email: string; clientPrefix: 
     }
   }
   if (!sub) throw new Error("missing_subject");
-  const links = await readJson(LINKS_KEY);
+  const snapshot = await readJsonVersion(LINKS_KEY);
+  const links = snapshot.value;
   const current = orgRows(links);
   const existing = orgForFolder(current, clientPrefix);
   if (!existing) throw new Error("not_linked");
@@ -323,7 +334,7 @@ export async function createClientAccount(input: { email: string; clientPrefix: 
   existing.displayName = displayName;
   existing.clientPrefixes = [clientPrefix];
   links.organizations = current;
-  await writeJson(LINKS_KEY, links);
+  await writeJson(LINKS_KEY, links, snapshot.eTag);
   return { email, organizationId };
 }
 
@@ -358,7 +369,7 @@ export async function listClientUsers(clientPrefix: string): Promise<Array<{ ema
 
 export function clientUserStatus(
   storedStatus: string,
-  cognitoUser: { Enabled?: boolean; UserStatus?: string },
+  cognitoUser: { Enabled?: boolean | undefined; UserStatus?: string | undefined },
 ): string {
   if (storedStatus === "REVOKED" || cognitoUser.Enabled === false) return "REVOKED";
   return cognitoUser.UserStatus === "FORCE_CHANGE_PASSWORD" ? "INVITED" : "ACTIVE";
@@ -397,7 +408,8 @@ export async function howToReadUpload(clientPrefix: string): Promise<{ url: stri
 export async function commitHowToRead(clientPrefix: string, key: string): Promise<void> {
   const folder = folderOf(clientPrefix);
   if (!key.startsWith(`reportgen_portal/how_to_read/${folder}/`) || !key.endsWith(".pdf")) throw new Error("invalid_request");
-  const links = await readJson(LINKS_KEY);
+  const snapshot = await readJsonVersion(LINKS_KEY);
+  const links = snapshot.value;
   const current = orgRows(links);
   const org = orgForFolder(current, folder);
   if (!org) throw new Error("not_found");
@@ -406,7 +418,7 @@ export async function commitHowToRead(clientPrefix: string, key: string): Promis
   org.howToReadKey = key;
   org.howToReadHistory = history.slice(-20);
   links.organizations = current;
-  await writeJson(LINKS_KEY, links);
+  await writeJson(LINKS_KEY, links, snapshot.eTag);
 }
 
 export async function revokeClientUser(clientPrefix: string, email: string): Promise<void> {
@@ -619,8 +631,20 @@ export async function listPortalBuildings(organizationId: string | null, admin: 
 }
 
 export async function loadPortalStatus(prefix: string): Promise<Record<string, unknown>> {
-  const status = await readJson(`${prefix.replace(/\/?$/, "/")}reportgen/client_portal/status.json`);
-  return enrichPortalStatus(prefix, status);
+  return (await loadPortalStatusVersion(prefix)).status;
+}
+
+export type PortalStatusSnapshot = {
+  status: Record<string, unknown>;
+  eTag: string | null;
+};
+
+export async function loadPortalStatusVersion(prefix: string): Promise<PortalStatusSnapshot> {
+  const snapshot = await readJsonVersion(`${prefix.replace(/\/?$/, "/")}reportgen/client_portal/status.json`);
+  return {
+    status: await enrichPortalStatus(prefix, snapshot.value),
+    eTag: snapshot.eTag,
+  };
 }
 
 export async function signedRead(key: string): Promise<string> {
@@ -643,10 +667,14 @@ export function allowedClientKey(prefix: string, key: string): boolean {
     || key.includes("/reportgen/takeoff/asbuilt.");
 }
 
-export async function savePortalStatus(prefix: string, status: Record<string, unknown>): Promise<void> {
+export async function savePortalStatus(
+  prefix: string,
+  status: Record<string, unknown>,
+  expectedETag: string | null,
+): Promise<void> {
   const key = `${prefix.replace(/\/?$/, "/")}reportgen/client_portal/status.json`;
   status.updatedAt = new Date().toISOString();
-  await writeJson(key, status);
+  await writeJson(key, status, expectedETag);
 }
 
 export function clientCanSee(status: Record<string, unknown>, organizationId: string | null, admin: boolean): boolean {

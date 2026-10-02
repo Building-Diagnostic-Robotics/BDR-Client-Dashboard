@@ -225,6 +225,8 @@ export class ClientAuthService {
   }): Promise<EstablishedClientSession> {
     const now = this.now();
     const { verified, tokens } = input;
+    const refreshToken = tokens.refreshToken;
+    if (!refreshToken) authenticationRequired();
     let identity = await this.store.getClientIdentity(
       identityKeys.subject(verified.issuer, verified.sub),
       { consistentRead: true },
@@ -261,7 +263,7 @@ export class ClientAuthService {
       issuer: verified.issuer,
       sub: verified.sub,
       accessTokenCiphertext: await this.cipher.encrypt(tokens.accessToken),
-      refreshTokenCiphertext: await this.cipher.encrypt(tokens.refreshToken),
+      refreshTokenCiphertext: await this.cipher.encrypt(refreshToken),
       accessTokenExpiresAt: verified.accessTokenExpiresAt,
       csrfTokenHash: createHash("sha256").update(csrfToken).digest("hex"),
       absoluteExpiresAt,
