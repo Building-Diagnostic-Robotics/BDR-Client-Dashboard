@@ -56,14 +56,15 @@ These routes live on the Client BFF. Reads return `404` when the session’s org
 
 | Route | Who | Purpose |
 | --- | --- | --- |
-| `GET /bff/portal/buildings` | Client or admin | Buildings visible to the caller. |
-| `GET /bff/portal/building` | Client or admin | One building’s status. Buildings marked `no_report` or `test_scan` are not shown to clients as approved reports. When history is hidden for the building, clients still receive the history list as empty. |
-| `GET /bff/portal/file` | Client or admin | Short-lived read URL for an allowed key under a building the caller owns. Clients cannot open a history-only file while history is hidden, or a single version hidden from clients. |
+| `GET /bff/portal/buildings` | Client or admin | Buildings visible to the caller. Each item includes `awaitingReports`, the report types still waiting for administrator approval. |
+| `GET /bff/portal/building` | Client or admin | One building’s status. Buildings marked `no_report` or `test_scan` are not shown to clients as approved reports. When history is hidden for the building, clients still receive the history list as empty. Clients do not receive `historyHidden`, `historyHideReason`, or `hiddenHistoryKeys`. Administrators receive those fields and every history row, with `hiddenFromClients` on a version that clients cannot see. |
+| `GET /bff/portal/file` | Client or admin | Short-lived read URL for an allowed key under a building the caller owns. Clients cannot open a history-only file while history is hidden, or a single version hidden from clients. The current approved file stays openable. |
 | `POST /bff/portal/building` | Client or admin | Building actions. Approval, history hide/restore, stale, and building marks require an administrator. Clients may edit identity and capital-plan inputs on a visible report, which marks that report stale. |
+| `POST /bff/portal/admins` | Admin | Body `{ "email" }`. Creates the person in the admin pool when needed, adds them to `bdr-admins`, and Cognito emails a temporary password. |
 | `GET /bff/portal/clients` and the `client-*` routes | Admin | Link a folder, rename a client, invite, list, revoke, resend, or replace a user. |
 | `GET` and `POST /bff/portal/how-to-read` | Admin | Read or replace the organization How to Read file stored for a client prefix. |
 
-`POST /bff/portal/building` accepts an `action` field. Administrator actions include `approve`, `notes`, `hide-history`, `restore-history`, `hide-history-item`, `restore-history-item`, `building-mark`, `mark-stale`, `undo-stale`, and `reject-asbuilt`. Shared actions include `section-mark`, `capital-plan`, `identity`, `asbuilt-upload`, `takeoff-building`, and `edit-visible`. Unknown actions return `400`.
+`POST /bff/portal/building` accepts an `action` field. Administrator actions include `approve`, `notes`, `hide-history`, `restore-history`, `hide-history-item`, `restore-history-item`, `building-mark`, `mark-stale`, `undo-stale`, and `reject-asbuilt`. `hide-history` requires `reason`. `hide-history-item` and `restore-history-item` require `key`, the stored PDF key. Hiding keeps the file in storage. Shared actions include `section-mark`, `capital-plan`, `identity`, `asbuilt-upload`, `takeoff-building`, and `edit-visible`. Unknown actions return `400`. `notes` records `pendingAdminEmail` and does not publish or hide a file. `markStale` on that action also marks the current report stale and removes it from the client’s current file.
 
 Outbound portal email is not sent. `src/portal/email.ts` records the SES identity blocker, and notices stay on `pendingAdminEmail` in the building status until a sending domain is verified.
 

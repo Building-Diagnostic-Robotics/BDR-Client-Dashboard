@@ -84,6 +84,6 @@ CloudWatch alarms cover Lambda errors/throttles, API 5xx responses, DynamoDB thr
 
 ## Shared building portal
 
-The dashboard’s building list, building view, map, review queue, and organization tools use a second path on the Client BFF. That path reads and writes building status JSON in the shared data bucket. It does not publish into the inspection registry. Clients only receive buildings linked to their organization. Portal administrator actions, including approval and client-user management, require an admin-pool session.
+The dashboard’s building list, building view, map, review queue, and organization tools use a second path on the Client BFF. That path reads and writes building status JSON in the shared data bucket. It does not publish into the inspection registry. Clients only receive buildings linked to their organization. Portal administrator actions, including approval, report-history hiding, client-user management, and inviting another administrator, require an admin-pool session. History hiding is stored on the building status as `historyHidden` and `hiddenHistoryKeys`. It does not remove the building or the PDF.
 
 See [backend](./backend.md), [frontend](./frontend.md), [API contracts](./api-contracts.md), [project layout](./project_layout.md), and the [runbooks](./runbooks/).

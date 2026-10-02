@@ -26,10 +26,10 @@ The shell shows a different nav for portal administrators (`me.admin`): Clients,
 | `/projects` | `src/app/projects/page.tsx` | Building list from `GET /bff/portal/buildings`. Administrators pick a client first. Filters cover name, address, robot, report type, and scan dates. |
 | `/projects/[projectId]` | `src/app/projects/[projectId]/` | Published inspection history from the registry APIs, including per-report view/download and download-all. |
 | `/buildings` | `src/app/buildings/page.tsx` | Redirects to `/projects`. |
-| `/buildings/view` | `src/app/buildings/view/page.tsx` | One building, selected with `?prefix=`. Loads `GET /bff/portal/building`. Administrators approve or mark reports. Clients can edit visible inputs. |
+| `/buildings/view` | `src/app/buildings/view/page.tsx` | One building, selected with `?prefix=`. Loads `GET /bff/portal/building`. Administrators approve or mark reports and hide or restore report history. Clients can edit visible inputs. History stays on the page; clients see an empty list when the whole history is hidden. |
 | `/map` | `src/app/map/page.tsx` | Aerial, moisture overlay, and anomaly filters for `?prefix=`, after the map files exist. |
-| `/review` | `src/app/review/page.tsx` | Administrator queue of reports with `awaitingClientAdmin`. |
-| `/admin-tools` | `src/app/admin-tools/page.tsx` | Link a client folder, rename it, and invite, resend, revoke, or replace users. |
+| `/review` | `src/app/review/page.tsx` | Administrator queue of reports with `awaitingClientAdmin`, not stale, and not yet client-visible. Each row can view the PDF, approve it, or send notes. |
+| `/admin-tools` | `src/app/admin-tools/page.tsx` | Create a client beside Add admin. Link a folder, rename it, and invite, resend, revoke, or replace client users. Add admin invites an administrator by email. |
 | `/how-to` | `src/app/how-to/page.tsx` | Client instructions. |
 | `/how-to/admin` | `src/app/how-to/admin/page.tsx` | Administrator instructions. |
 

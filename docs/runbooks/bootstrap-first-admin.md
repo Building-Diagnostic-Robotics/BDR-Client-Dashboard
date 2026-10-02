@@ -161,3 +161,5 @@ npm run cli --workspace @bdr/portal-admin -- organizations list
 The command must succeed. Record the bootstrap in the change record, then securely remove the temporary transaction file. It contains identifiers and audit metadata, not passwords or TOTP secrets.
 
 If a record already exists or the transaction fails, stop and investigate. Do not edit existing identity, guard, or audit records to force this procedure through.
+
+After this first administrator can sign in, further administrators are invited from Organization tools. Add admin posts `{ "email" }` to `POST /bff/portal/admins`, creates the Cognito user in the admin pool when needed, adds the `bdr-admins` group, and Cognito emails a temporary password. That invite needs an existing administrator session, so it does not replace this bootstrap.

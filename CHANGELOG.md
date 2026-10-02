@@ -4,6 +4,7 @@ History of this repository from `git log` (newest first). Merge commits are omit
 
 ## 2026-10-02
 
+- `cfeae66` Let administrators hide report history, invite admins, and review waiting reports.
 - `502e624` Fix building and map page types so the production build type-checks.
 - `17c5a77` Keep client account responses compatible with the published dashboard.
 - `934dec9` Let clients sign in and read shared building portal status.
