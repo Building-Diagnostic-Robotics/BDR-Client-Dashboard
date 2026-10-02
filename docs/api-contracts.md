@@ -31,7 +31,7 @@ All client mutations require the expected origin and the `x-bdr-csrf` header. Re
 
 `POST /bff/auth/password` accepts an email, password, and optional MFA or new-password challenge. A completed sign-in sets the session cookie and returns `returnTo`.
 
-The current dashboard also calls the building portal routes under `/bff/portal/*`: building lists and status, file URLs, administrator client-user management, and building actions such as approve, hide, and client edits. Those responses are enforced in `apps/services/src/client-bff.ts` and `apps/services/src/portal/buildings.ts`. They are not yet described by the Zod schemas in `packages/contracts`. Ownership still comes from the session. Administrator-only routes return `403` for a client. See [backend](./backend.md) for the route table and [frontend](./frontend.md) for the pages.
+The current dashboard also calls the building portal routes under `/bff/portal/*`: building lists and status, file URLs, administrator client-user management, and building actions such as approve, history hide, and client edits. Those responses are enforced in `apps/services/src/client-bff.ts` and `apps/services/src/portal/buildings.ts`. They are not yet described by the Zod schemas in `packages/contracts`. Ownership still comes from the session. Administrator-only routes return `403` for a client. See [backend](./backend.md) for the route table and [frontend](./frontend.md) for the pages.
 
 ## Portal Admin API
 

@@ -57,13 +57,13 @@ These routes live on the Client BFF. Reads return `404` when the session’s org
 | Route | Who | Purpose |
 | --- | --- | --- |
 | `GET /bff/portal/buildings` | Client or admin | Buildings visible to the caller. |
-| `GET /bff/portal/building` | Client or admin | One building’s status. Hidden buildings, and buildings marked `no_report` or `test_scan`, are not shown to clients as approved reports. |
-| `GET /bff/portal/file` | Client or admin | Short-lived read URL for an allowed key under a building the caller owns. |
-| `POST /bff/portal/building` | Client or admin | Building actions. Approval, hide/restore, stale, and building marks require an administrator. Clients may edit identity and capital-plan inputs on a visible report, which marks that report stale. |
+| `GET /bff/portal/building` | Client or admin | One building’s status. Buildings marked `no_report` or `test_scan` are not shown to clients as approved reports. When history is hidden for the building, clients still receive the history list as empty. |
+| `GET /bff/portal/file` | Client or admin | Short-lived read URL for an allowed key under a building the caller owns. Clients cannot open a history-only file while history is hidden, or a single version hidden from clients. |
+| `POST /bff/portal/building` | Client or admin | Building actions. Approval, history hide/restore, stale, and building marks require an administrator. Clients may edit identity and capital-plan inputs on a visible report, which marks that report stale. |
 | `GET /bff/portal/clients` and the `client-*` routes | Admin | Link a folder, rename a client, invite, list, revoke, resend, or replace a user. |
 | `GET` and `POST /bff/portal/how-to-read` | Admin | Read or replace the organization How to Read file stored for a client prefix. |
 
-`POST /bff/portal/building` accepts an `action` field. Administrator actions include `approve`, `notes`, `hide`, `restore`, `building-mark`, `mark-stale`, `undo-stale`, and `reject-asbuilt`. Shared actions include `section-mark`, `capital-plan`, `identity`, `asbuilt-upload`, `takeoff-building`, and `edit-visible`. Unknown actions return `400`.
+`POST /bff/portal/building` accepts an `action` field. Administrator actions include `approve`, `notes`, `hide-history`, `restore-history`, `hide-history-item`, `restore-history-item`, `building-mark`, `mark-stale`, `undo-stale`, and `reject-asbuilt`. Shared actions include `section-mark`, `capital-plan`, `identity`, `asbuilt-upload`, `takeoff-building`, and `edit-visible`. Unknown actions return `400`.
 
 Outbound portal email is not sent. `src/portal/email.ts` records the SES identity blocker, and notices stay on `pendingAdminEmail` in the building status until a sending domain is verified.
 

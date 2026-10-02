@@ -128,6 +128,7 @@ export default function AdminToolsPage() {
   const [clients, setClients] = useState<Client[] | null>(null);
   const [folders, setFolders] = useState<string[]>([]);
   const [selected, setSelected] = useState<string>("");
+  const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   function load() {
@@ -154,31 +155,55 @@ export default function AdminToolsPage() {
       <section>
         <h1>Organization tools</h1>
         <p>Create a client, link one folder, then invite the people who should sign in to that client.</p>
+        {message ? <p>{message}</p> : null}
         {error ? <p role="alert">{error}</p> : null}
-        <form className="surface form-grid" onSubmit={(event) => {
-          event.preventDefault();
-          const form = event.currentTarget;
-          const data = new FormData(form);
-          setError(null);
-          void postClient("/bff/portal/clients", {
-            displayName: String(data.get("name") || ""),
-            clientPrefix: String(data.get("folder") || ""),
-          }, asOk).then(() => { form.reset(); setSelected(String(data.get("folder") || "")); load(); })
-            .catch(() => setError("The client could not be created. Choose a folder that is not already linked."));
-        }}>
-          <h2>Create client</h2>
-          <label>Client name
-            <input name="name" required placeholder="SIG Roofing" />
-          </label>
-          <label>Folder
-            <select name="folder" required defaultValue="">
-              <option value="" disabled>Choose a folder</option>
-              {folders.map((folder) => <option key={folder} value={folder}>{folder}</option>)}
-            </select>
-          </label>
-          <button className="button button--primary" type="submit">Create and link</button>
-          {folders.length === 0 ? <p>No unlinked client folders are available.</p> : null}
-        </form>
+        <div className="org-tools-cards">
+          <form className="surface form-grid" onSubmit={(event) => {
+            event.preventDefault();
+            const form = event.currentTarget;
+            const data = new FormData(form);
+            setError(null);
+            setMessage(null);
+            void postClient("/bff/portal/clients", {
+              displayName: String(data.get("name") || ""),
+              clientPrefix: String(data.get("folder") || ""),
+            }, asOk).then(() => { form.reset(); setSelected(String(data.get("folder") || "")); load(); })
+              .catch(() => setError("The client could not be created. Choose a folder that is not already linked."));
+          }}>
+            <h2>Create client</h2>
+            <label>Client name
+              <input name="name" required placeholder="SIG Roofing" />
+            </label>
+            <label>Folder
+              <select name="folder" required defaultValue="">
+                <option value="" disabled>Choose a folder</option>
+                {folders.map((folder) => <option key={folder} value={folder}>{folder}</option>)}
+              </select>
+            </label>
+            <button className="button button--primary" type="submit">Create and link</button>
+            {folders.length === 0 ? <p>No unlinked client folders are available.</p> : null}
+          </form>
+          <form className="surface form-grid" onSubmit={(event) => {
+            event.preventDefault();
+            const form = event.currentTarget;
+            const email = String(new FormData(form).get("email") || "");
+            setError(null);
+            setMessage(null);
+            void postClient("/bff/portal/admins", { email }, asOk)
+              .then(() => {
+                form.reset();
+                setMessage(`Invite sent to ${email}. Cognito emailed a temporary password.`);
+              })
+              .catch(() => setError("The admin could not be added."));
+          }}>
+            <h2>Add admin</h2>
+            <p>This person can use Organization tools and see every client.</p>
+            <label>Email
+              <input name="email" type="email" required placeholder="admin@bdr.com" />
+            </label>
+            <button className="button button--primary" type="submit">Send admin invite</button>
+          </form>
+        </div>
 
         <h2>Clients</h2>
         {!clients ? <p>Loading clients…</p> : clients.length === 0 ? <p>No clients yet.</p> : (

@@ -18,6 +18,7 @@ type HistoryItem = {
   at?: string | undefined;
   generatedAt?: string | undefined;
   reportgenApprovedAt?: string | undefined;
+  hiddenFromClients?: boolean | undefined;
 };
 
 const asStatus = { parse(value: unknown): Status { return (value ?? {}) as Status; } };
@@ -90,6 +91,28 @@ function BuildingView() {
   const markedOff = status?.buildingMark === "no_report" || status?.buildingMark === "test_scan";
   const canEdit = admin || Object.values(reports).some((report) => report.clientVisible);
   const reportRows = Object.entries(reports);
+  const storedHistory = (Array.isArray(status?.history) ? status.history : []) as HistoryItem[];
+  const historyKeys = new Set(storedHistory.map((item) => item.key || item.approvedKey).filter(Boolean));
+  const staleHistory: HistoryItem[] = admin
+    ? reportRows
+        .filter(([, report]) => report.stale && report.approvedKey && !historyKeys.has(report.approvedKey))
+        .map(([name, report]) => ({
+          reportType: name,
+          key: report.approvedKey,
+          stale: true,
+          label: "Stale",
+          generatedAt: report.generatedAt,
+        }))
+    : [];
+  const history: HistoryItem[] = [
+    ...storedHistory.map((item) => {
+      const key = item.key || item.approvedKey;
+      const current = reportRows.find(([, report]) => report.approvedKey && report.approvedKey === key);
+      if (!admin || !current?.[1].stale) return item;
+      return { ...item, stale: true, key: key || current[1].approvedKey };
+    }),
+    ...staleHistory,
+  ];
 
   function generatedLabel(value?: string | null): string {
     if (!value) return "Not generated";
@@ -165,43 +188,77 @@ function BuildingView() {
           </div>
         )}
       </section>
-      {(() => {
-        const stored = (Array.isArray(status?.history) ? status.history : []) as HistoryItem[];
-        const seen = new Set(stored.map((item) => item.key || item.approvedKey));
-        const history: HistoryItem[] = [
-          ...stored,
-          ...reportRows
-            .filter(([, report]) => report.stale && report.approvedKey && !seen.has(report.approvedKey))
-            .map(([name, report]) => ({ reportType: name, key: report.approvedKey, stale: true, label: "Stale", generatedAt: report.generatedAt })),
-        ];
-        if (history.length === 0) return null;
-        return (
-        <section className="report-panel" aria-labelledby="history-title">
-          <h2 id="history-title">History</h2>
+      {status ? <section className="report-panel" aria-labelledby="history-title">
+        <h2 id="history-title">History</h2>
+        {admin ? (
+          <div className="history-controls">
+            {status?.historyHidden ? (
+              <div className="history-controls__restore">
+                <p>Hidden from clients{status.historyHideReason ? `: ${String(status.historyHideReason)}` : ""}. Clients see this section with no history.</p>
+                <button className="button button--outline" type="button" onClick={() => {
+                  void postClient("/bff/portal/building", { prefix, action: "restore-history" }, asOk).then(reload);
+                }}>Restore</button>
+              </div>
+            ) : (
+              <form className="history-controls__form" onSubmit={(event) => {
+                event.preventDefault();
+                const reason = String(new FormData(event.currentTarget).get("reason") || "");
+                void postClient("/bff/portal/building", { prefix, action: "hide-history", reason }, asOk).then(reload);
+              }}>
+                <label>Reason
+                  <input name="reason" required placeholder="Superseded scan" />
+                </label>
+                <button className="button button--outline" type="submit">Hide history from clients</button>
+              </form>
+            )}
+          </div>
+        ) : null}
+        {history.length === 0 ? (
+          <div className="empty-card"><h3>No history</h3><p>Earlier versions of reports for this building appear here.</p></div>
+        ) : (
           <div className="report-list">
             {history.map((item, index) => {
               const key = item.key || item.approvedKey;
+              const statusLabel = item.hiddenFromClients
+                ? "Hidden from clients"
+                : item.stale
+                  ? "Stale"
+                  : item.label || "Approved";
               return (
-                <article className="report-row" key={`${key || "history"}-${index}`}>
+                <article className="report-row report-row--stack" key={`${key || "history"}-${index}`}>
                   <div className="report-row__info">
                     <h3>{reportLabel(String(item.reportType || "Report"))}</h3>
                     <p>{generatedLabel(item.generatedAt || item.reportgenApprovedAt || item.at)}</p>
                   </div>
                   <div className="report-row__status-col">
-                    <span className={`status ${item.stale ? "status--expected" : "status--published"}`}>
-                      <span className="status__dot" />{item.stale ? "Stale" : item.label || "Approved"}
+                    <span className={`status ${item.hiddenFromClients || item.stale ? "status--expected" : "status--published"}`}>
+                      <span className="status__dot" />{statusLabel}
                     </span>
                   </div>
-                  <div className="report-row__actions-col">
+                  <div className="report-row__actions-col artifact-actions--compact">
+                    {admin && key ? (
+                      <button
+                        className="button button--outline"
+                        type="button"
+                        onClick={() => {
+                          void postClient("/bff/portal/building", {
+                            prefix,
+                            action: item.hiddenFromClients ? "restore-history-item" : "hide-history-item",
+                            key,
+                          }, asOk).then(reload);
+                        }}
+                      >
+                        {item.hiddenFromClients ? "Restore" : "Hide from clients"}
+                      </button>
+                    ) : null}
                     {key ? <button className="button button--outline" type="button" onClick={() => openFile(prefix, key)}>Open PDF</button> : null}
                   </div>
                 </article>
               );
             })}
           </div>
-        </section>
-        );
-      })()}
+        )}
+      </section> : null}
       {status?.released ? <Aerial prefix={prefix} /> : null}
 
       {admin ? (
@@ -222,32 +279,6 @@ function BuildingView() {
                 <option value="test_scan">Test scan</option>
               </select>
             </label>
-          </div>
-        </details>
-      ) : null}
-      {admin ? (
-        <details className="fold">
-          <summary>Hide from clients{status?.hidden ? " · Hidden" : ""}</summary>
-          <div className="form-grid">
-            {status?.hidden ? (
-              <>
-                <p>Hidden{status.hideReason ? `: ${String(status.hideReason)}` : ""}. Clients do not see this building.</p>
-                <button className="button button--outline" type="button" onClick={() => {
-                  void postClient("/bff/portal/building", { prefix, action: "restore" }, asOk).then(reload);
-                }}>Restore</button>
-              </>
-            ) : (
-              <form onSubmit={(event) => {
-                event.preventDefault();
-                const reason = String(new FormData(event.currentTarget).get("reason") || "");
-                void postClient("/bff/portal/building", { prefix, action: "hide", reason }, asOk).then(reload);
-              }}>
-                <label>Reason
-                  <input name="reason" required placeholder="Superseded scan" />
-                </label>
-                <button className="button button--outline" type="submit">Hide from clients</button>
-              </form>
-            )}
           </div>
         </details>
       ) : null}

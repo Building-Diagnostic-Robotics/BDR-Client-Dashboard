@@ -526,10 +526,24 @@ h3 {
   font-weight: 500;
 }
 
-.project-grid {
+.project-grid,
+.org-tools-cards {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1rem;
+}
+
+.org-tools-cards {
+  align-items: stretch;
+  margin-bottom: 1.5rem;
+}
+
+.org-tools-cards .surface {
+  margin-bottom: 0;
+}
+
+.org-tools-cards .form-grid {
+  max-width: none;
 }
 
 button.project-card {
@@ -1078,7 +1092,8 @@ button.project-card {
     flex: 1;
   }
 
-  .project-grid {
+  .project-grid,
+  .org-tools-cards {
     grid-template-columns: 1fr;
   }
 
@@ -1221,6 +1236,118 @@ button.project-card {
   margin: 0;
   padding: 1.1rem 1.5rem 0;
   font-size: 1.15rem;
+}
+
+.history-controls {
+  padding: 0.85rem 1.5rem 0.25rem;
+}
+
+.history-controls__form,
+.history-controls__restore {
+  display: grid;
+  justify-items: start;
+  gap: 0.75rem;
+  max-width: 28rem;
+}
+
+.history-controls__form label {
+  display: grid;
+  gap: 0.4rem;
+  width: 100%;
+  color: var(--gray-700);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.history-controls__form input {
+  width: 100%;
+  min-height: 2.5rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--gray-300);
+  border-radius: 0.5rem;
+  background: var(--white);
+  color: var(--gray-900);
+  font: inherit;
+  font-weight: 400;
+}
+
+.history-controls__restore p {
+  margin: 0;
+}
+
+.report-row--stack {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 0.75rem;
+}
+
+.report-row--stack .report-row__status-col,
+.report-row--stack .report-row__actions-col {
+  min-width: 0;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.review-empty {
+  margin: 0;
+  padding: 0.5rem 1.5rem 1.25rem;
+  color: var(--gray-600);
+}
+
+.review-notes {
+  grid-column: 1 / -1;
+}
+
+.review-notes summary {
+  width: fit-content;
+  color: var(--gray-700);
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.review-notes form {
+  display: grid;
+  justify-items: start;
+  gap: 0.75rem;
+  max-width: 36rem;
+  margin-top: 0.75rem;
+}
+
+.review-notes label {
+  display: grid;
+  gap: 0.35rem;
+  width: 100%;
+  color: var(--gray-700);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.review-notes textarea {
+  width: 100%;
+  min-height: 6rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--gray-300);
+  border-radius: 0.5rem;
+  background: var(--white);
+  color: var(--gray-900);
+  font: inherit;
+  font-weight: 400;
+}
+
+.review-notes__check {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: auto;
+  font-weight: 500;
+}
+
+.review-notes__check input {
+  width: 1rem;
+  height: 1rem;
+  min-height: 0;
 }
 
 .surface {

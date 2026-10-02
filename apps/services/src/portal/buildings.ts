@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
+  AdminAddUserToGroupCommand,
   AdminCreateUserCommand,
   AdminDisableUserCommand,
   AdminGetUserCommand,
@@ -29,6 +30,7 @@ export type PortalBuilding = {
   uploadTime: string | null;
   timeZone: string | null;
   readyReports: string[];
+  awaitingReports: string[];
   roofTakeoffOnly: boolean;
   buildingMark: string | null;
   legacy: boolean;
@@ -209,6 +211,33 @@ export async function ownsPrefix(organizationId: string | null, admin: boolean, 
   const normalized = prefix.replace(/^\/+|\/+$/g, "");
   const roots = await prefixesFor(organizationId, false);
   return roots.some((root) => normalized === root || normalized.startsWith(`${root}/`));
+}
+
+export async function createPortalAdmin(emailInput: string): Promise<{ email: string }> {
+  const email = emailInput.trim().toLowerCase();
+  if (!email.includes("@")) throw new Error("invalid_request");
+  const poolId = process.env.ADMIN_ISSUER?.split("/").pop();
+  if (!poolId) throw new Error("missing_configuration");
+  const cognito = new CognitoIdentityProviderClient({});
+  try {
+    await cognito.send(new AdminCreateUserCommand({
+      UserPoolId: poolId,
+      Username: email,
+      UserAttributes: [
+        { Name: "email", Value: email },
+        { Name: "email_verified", Value: "true" },
+      ],
+      DesiredDeliveryMediums: ["EMAIL"],
+    }));
+  } catch (error) {
+    if (!(error instanceof Error) || error.name !== "UsernameExistsException") throw error;
+  }
+  await cognito.send(new AdminAddUserToGroupCommand({
+    UserPoolId: poolId,
+    Username: email,
+    GroupName: "bdr-admins",
+  }));
+  return { email };
 }
 
 export async function createClientAccount(input: { email: string; clientPrefix: string }): Promise<{ email: string; organizationId: string }> {
@@ -527,10 +556,13 @@ export async function enrichPortalStatus(prefix: string, status: Record<string, 
 
 function summary(prefix: string, status: Record<string, unknown>): PortalBuilding {
   const reports = status.reports && typeof status.reports === "object"
-    ? status.reports as Record<string, { clientVisible?: boolean }>
+    ? status.reports as Record<string, { clientVisible?: boolean; stale?: boolean; awaitingClientAdmin?: boolean }>
     : {};
   const ready = Object.entries(reports)
     .filter(([, report]) => report?.clientVisible)
+    .map(([name]) => name);
+  const awaiting = Object.entries(reports)
+    .filter(([, report]) => report?.awaitingClientAdmin && !report.stale && !report.clientVisible)
     .map(([name]) => name);
   const parts = prefix.replace(/\/$/, "").split("/");
   return {
@@ -541,6 +573,7 @@ function summary(prefix: string, status: Record<string, unknown>): PortalBuildin
     uploadTime: status.uploadTime ? String(status.uploadTime) : null,
     timeZone: status.timeZone ? String(status.timeZone) : null,
     readyReports: ready,
+    awaitingReports: awaiting,
     roofTakeoffOnly: Boolean(status.roofTakeoffOnly),
     buildingMark: status.buildingMark ? String(status.buildingMark) : null,
     legacy: Boolean(status.legacyVisible),
@@ -561,7 +594,7 @@ export async function listPortalBuildings(organizationId: string | null, admin: 
       const address = general.address || general.location;
       if (address && !status.address) status.address = address;
     }
-    if (!admin && (status.hidden || (!status.released && !status.legacyVisible))) return null;
+    if (!admin && !status.released && !status.legacyVisible) return null;
     let enriched = status;
     try {
       enriched = await enrichPortalStatus(prefix, status);

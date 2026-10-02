@@ -20,7 +20,7 @@ import {
 import { JSON_HEADERS, clearCookie, json, redirect, requestId, secureCookie } from "./shared/http";
 import { ClientResourceService } from "./client/resources";
 import { emailBlocked } from "./portal/email";
-import { allowedClientKey, commitHowToRead, createClientAccount, grantPortalAdmin, howToReadFor, howToReadUpload, linkClient, listClientUsers, listLinkedClients, listPortalBuildings, listUnlinkedFolders, loadPortalStatus, ownsPrefix, PORTAL_ADMIN_ORGANIZATION_ID, renameClient, replaceClientEmail, reportFileMatches, resendClientInvite, revokeClientUser, savePortalStatus, signedRead, signedUpload } from "./portal/buildings";
+import { allowedClientKey, commitHowToRead, createClientAccount, createPortalAdmin, grantPortalAdmin, howToReadFor, howToReadUpload, linkClient, listClientUsers, listLinkedClients, listPortalBuildings, listUnlinkedFolders, loadPortalStatus, ownsPrefix, PORTAL_ADMIN_ORGANIZATION_ID, renameClient, replaceClientEmail, reportFileMatches, resendClientInvite, revokeClientUser, savePortalStatus, signedRead, signedUpload } from "./portal/buildings";
 
 const cognito = new CognitoIdentityProviderClient({});
 const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60;
@@ -363,6 +363,12 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
           const payload = JSON.parse(event.body ?? "{}") as { displayName?: string; clientPrefix?: string };
           return json(200, await linkClient({ displayName: String(payload.displayName ?? ""), clientPrefix: String(payload.clientPrefix ?? "") }));
         }
+        if (method === "POST" && path === "/bff/portal/admins") {
+          assertMutationRequest(event, dependencies.portalOrigin, active.session.csrfTokenHash);
+          if (!admin) return json(403, { error: "forbidden" });
+          const payload = JSON.parse(event.body ?? "{}") as { email?: string };
+          return json(200, await createPortalAdmin(String(payload.email ?? "")));
+        }
         if (method === "POST" && path === "/bff/portal/client-rename") {
           assertMutationRequest(event, dependencies.portalOrigin, active.session.csrfTokenHash);
           if (!admin) return json(403, { error: "forbidden" });
@@ -427,16 +433,22 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
           const status = await loadPortalStatus(prefix);
           if (!(await ownsPrefix(organizationId, admin, prefix))) return json(404, { error: "not_found" });
           if (!allowedClientKey(prefix, key)) return json(400, { error: "invalid_request" });
+          if (!admin && !clientMayOpenKey(status, key)) return json(404, { error: "not_found" });
           return json(200, { url: await signedRead(key) });
         }
         if (method === "GET" && path === "/bff/portal/building") {
           const prefix = query(event, "prefix") ?? "";
           const status = await loadPortalStatus(prefix);
           if (!(await ownsPrefix(organizationId, admin, prefix))) return json(404, { error: "not_found" });
-          if (!admin && status.hidden) return json(404, { error: "not_found" });
           const clientView = { ...status };
           delete clientView.operatorError;
           delete clientView.pendingAdminEmail;
+          clientView.history = historyForCaller(status, admin);
+          if (!admin) {
+            delete clientView.historyHidden;
+            delete clientView.historyHideReason;
+            delete clientView.hiddenHistoryKeys;
+          }
           if (!admin && (clientView.buildingMark === "no_report" || clientView.buildingMark === "test_scan")) {
             const reports = clientView.reports as Record<string, Record<string, unknown>> | undefined;
             if (reports) {
@@ -521,17 +533,33 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
             await savePortalStatus(prefix, status);
             return json(200, { ok: true });
           }
-          if (action === "hide" && admin) {
+          if (action === "hide-history" && admin) {
             const reason = String(payload.reason || "").trim();
             if (!reason) return json(400, { error: "invalid_request" });
-            status.hidden = true;
-            status.hideReason = reason;
+            status.historyHidden = true;
+            status.historyHideReason = reason;
             await savePortalStatus(prefix, status);
             return json(200, { ok: true });
           }
-          if (action === "restore" && admin) {
-            status.hidden = false;
-            status.hideReason = null;
+          if (action === "restore-history" && admin) {
+            status.historyHidden = false;
+            status.historyHideReason = null;
+            await savePortalStatus(prefix, status);
+            return json(200, { ok: true });
+          }
+          if (action === "hide-history-item" && admin) {
+            const key = String(payload.key || "").trim();
+            if (!key) return json(400, { error: "invalid_request" });
+            const keys = hiddenHistoryKeys(status);
+            if (!keys.includes(key)) keys.push(key);
+            status.hiddenHistoryKeys = keys;
+            await savePortalStatus(prefix, status);
+            return json(200, { ok: true });
+          }
+          if (action === "restore-history-item" && admin) {
+            const key = String(payload.key || "").trim();
+            if (!key) return json(400, { error: "invalid_request" });
+            status.hiddenHistoryKeys = hiddenHistoryKeys(status).filter((item) => item !== key);
             await savePortalStatus(prefix, status);
             return json(200, { ok: true });
           }
@@ -689,6 +717,74 @@ function stampEdit(status: Record<string, unknown>, userId: string): void {
   const edits = Array.isArray(status.edits) ? status.edits as object[] : [];
   edits.push({ userId, at: new Date().toISOString() });
   status.edits = edits.slice(-20);
+}
+
+function historyItemKey(item: Record<string, unknown>): string {
+  return String(item.key || item.approvedKey || "");
+}
+
+function hiddenHistoryKeys(status: Record<string, unknown>): string[] {
+  if (!Array.isArray(status.hiddenHistoryKeys)) return [];
+  return status.hiddenHistoryKeys.map((key) => String(key)).filter(Boolean);
+}
+
+function currentReportKeys(status: Record<string, unknown>): Set<string> {
+  const reports = status.reports && typeof status.reports === "object"
+    ? status.reports as Record<string, Record<string, unknown>>
+    : {};
+  const keys = new Set<string>();
+  for (const report of Object.values(reports)) {
+    const key = String(report.approvedKey || "");
+    if (key) keys.add(key);
+  }
+  return keys;
+}
+
+function assembledHistory(status: Record<string, unknown>): Array<Record<string, unknown>> {
+  const stored = Array.isArray(status.history) ? status.history as Array<Record<string, unknown>> : [];
+  const seen = new Set(stored.map(historyItemKey).filter(Boolean));
+  const reports = status.reports && typeof status.reports === "object"
+    ? status.reports as Record<string, Record<string, unknown>>
+    : {};
+  const extra: Array<Record<string, unknown>> = [];
+  for (const [name, report] of Object.entries(reports)) {
+    const key = String(report.approvedKey || "");
+    if (report.stale && key && !seen.has(key)) {
+      extra.push({
+        reportType: name,
+        key,
+        stale: true,
+        label: "Stale",
+        generatedAt: report.generatedAt,
+      });
+    }
+  }
+  const hidden = new Set(hiddenHistoryKeys(status));
+  return [...stored, ...extra].map((item) => ({
+    ...item,
+    hiddenFromClients: hidden.has(historyItemKey(item)),
+  }));
+}
+
+function historyForCaller(status: Record<string, unknown>, admin: boolean): Array<Record<string, unknown>> {
+  const history = assembledHistory(status);
+  if (admin) return history;
+  if (status.historyHidden) return [];
+  return history
+    .filter((item) => !item.hiddenFromClients)
+    .map((item) => {
+      const copy = { ...item };
+      delete copy.hiddenFromClients;
+      return copy;
+    });
+}
+
+function clientMayOpenKey(status: Record<string, unknown>, key: string): boolean {
+  if (currentReportKeys(status).has(key)) return true;
+  const inHistory = assembledHistory(status).some((item) => historyItemKey(item) === key);
+  if (!inHistory) return true;
+  if (status.historyHidden) return false;
+  return !hiddenHistoryKeys(status).includes(key);
 }
 
 function rememberReport(status: Record<string, unknown>, reportType: string, report: Record<string, unknown>, stale: boolean): void {
