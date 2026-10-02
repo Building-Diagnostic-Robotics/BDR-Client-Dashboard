@@ -119,6 +119,7 @@ export class PortalStack extends Stack {
           "cognito-idp:AdminCreateUser",
           "cognito-idp:AdminAddUserToGroup",
           "cognito-idp:AdminDisableUser",
+          "cognito-idp:AdminEnableUser",
           "cognito-idp:AdminGetUser",
         ],
         resources: [identity.clientUserPool.userPoolArn, identity.adminUserPool.userPoolArn],

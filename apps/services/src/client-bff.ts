@@ -20,7 +20,7 @@ import {
 import { JSON_HEADERS, clearCookie, json, redirect, requestId, secureCookie } from "./shared/http";
 import { ClientResourceService } from "./client/resources";
 import { emailBlocked } from "./portal/email";
-import { allowedClientKey, commitHowToRead, createClientAccount, createPortalAdmin, grantPortalAdmin, howToReadFor, howToReadUpload, linkClient, listClientUsers, listLinkedClients, listPortalBuildings, listUnlinkedFolders, loadPortalStatus, ownsPrefix, PORTAL_ADMIN_ORGANIZATION_ID, renameClient, replaceClientEmail, reportFileMatches, resendClientInvite, revokeClientUser, savePortalStatus, signedRead, signedUpload } from "./portal/buildings";
+import { allowedClientKey, clientCanSee, commitHowToRead, createClientAccount, createPortalAdmin, grantPortalAdmin, howToReadFor, howToReadUpload, linkClient, listClientUsers, listLinkedClients, listPortalBuildings, listUnlinkedFolders, loadPortalStatus, ownsPrefix, PORTAL_ADMIN_ORGANIZATION_ID, renameClient, replaceClientEmail, reportFileMatches, resendClientInvite, revokeClientUser, savePortalStatus, signedRead, signedUpload } from "./portal/buildings";
 
 const cognito = new CognitoIdentityProviderClient({});
 const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60;
@@ -438,8 +438,9 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
         }
         if (method === "GET" && path === "/bff/portal/building") {
           const prefix = query(event, "prefix") ?? "";
-          const status = await loadPortalStatus(prefix);
           if (!(await ownsPrefix(organizationId, admin, prefix))) return json(404, { error: "not_found" });
+          const status = await loadPortalStatus(prefix);
+          if (!clientCanSee(status, organizationId, admin)) return json(404, { error: "not_found" });
           const clientView = { ...status };
           delete clientView.operatorError;
           delete clientView.pendingAdminEmail;
@@ -476,6 +477,7 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
             report.clientVisible = true;
             report.awaitingClientAdmin = false;
             report.stale = false;
+            status.released = true;
             rememberReport(status, reportType, report, false);
             if (reportType === "ASSESSMENT" || reportType === "EVIDENCE") {
               status.mapReady = true;

@@ -2,6 +2,11 @@
 
 History of this repository from `git log` (newest first). Merge commits are omitted; the feature commit on each pull request is listed instead.
 
+## Unreleased
+
+- Fix shared-building visibility so an approved report makes its building available to the client, including existing records where `clientVisible` was set before the building release flag.
+- Re-enable an existing disabled Cognito client when an administrator explicitly invites that email again, and report disabled accounts as revoked instead of signed in.
+
 ## 2026-10-02
 
 - `cfeae66` Let administrators hide report history, invite admins, and review waiting reports.

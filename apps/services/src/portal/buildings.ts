@@ -5,6 +5,7 @@ import {
   AdminAddUserToGroupCommand,
   AdminCreateUserCommand,
   AdminDisableUserCommand,
+  AdminEnableUserCommand,
   AdminGetUserCommand,
   CognitoIdentityProviderClient,
 } from "@aws-sdk/client-cognito-identity-provider";
@@ -269,6 +270,9 @@ export async function createClientAccount(input: { email: string; clientPrefix: 
     const existing = await cognito.send(new AdminGetUserCommand({ UserPoolId: poolId, Username: email }));
     sub = existing.UserAttributes?.find((attribute) => attribute.Name === "sub")?.Value;
     username = existing.Username ?? email;
+    if (existing.Enabled === false) {
+      await cognito.send(new AdminEnableUserCommand({ UserPoolId: poolId, Username: username }));
+    }
   }
   if (!sub) throw new Error("missing_subject");
   const links = await readJson(LINKS_KEY);
@@ -342,7 +346,7 @@ export async function listClientUsers(clientPrefix: string): Promise<Array<{ ema
     if (status !== "REVOKED" && cognito && poolId && email) {
       try {
         const user = await cognito.send(new AdminGetUserCommand({ UserPoolId: poolId, Username: email }));
-        status = user.UserStatus === "FORCE_CHANGE_PASSWORD" ? "INVITED" : "ACTIVE";
+        status = clientUserStatus(status, user);
       } catch {
         status = status || "ACTIVE";
       }
@@ -350,6 +354,14 @@ export async function listClientUsers(clientPrefix: string): Promise<Array<{ ema
     users.push({ email, status, userId: String(item.userId || "") });
   }
   return users;
+}
+
+export function clientUserStatus(
+  storedStatus: string,
+  cognitoUser: { Enabled?: boolean; UserStatus?: string },
+): string {
+  if (storedStatus === "REVOKED" || cognitoUser.Enabled === false) return "REVOKED";
+  return cognitoUser.UserStatus === "FORCE_CHANGE_PASSWORD" ? "INVITED" : "ACTIVE";
 }
 
 export async function resendClientInvite(clientPrefix: string, email: string): Promise<void> {
@@ -594,7 +606,7 @@ export async function listPortalBuildings(organizationId: string | null, admin: 
       const address = general.address || general.location;
       if (address && !status.address) status.address = address;
     }
-    if (!admin && !status.released && !status.legacyVisible) return null;
+    if (!clientCanSee(status, organizationId, admin)) return null;
     let enriched = status;
     try {
       enriched = await enrichPortalStatus(prefix, status);
@@ -637,7 +649,14 @@ export async function savePortalStatus(prefix: string, status: Record<string, un
   await writeJson(key, status);
 }
 
-export function clientCanSee(status: Record<string, unknown>, organizationId: string, admin: boolean): boolean {
+export function clientCanSee(status: Record<string, unknown>, organizationId: string | null, admin: boolean): boolean {
   if (admin) return true;
-  return Boolean(status.released || status.legacyVisible);
+  const reports = status.reports && typeof status.reports === "object"
+    ? status.reports as Record<string, { clientVisible?: boolean }>
+    : {};
+  return Boolean(
+    status.released
+    || status.legacyVisible
+    || Object.values(reports).some((report) => report?.clientVisible),
+  );
 }

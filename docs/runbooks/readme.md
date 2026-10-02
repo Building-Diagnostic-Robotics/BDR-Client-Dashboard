@@ -2,6 +2,7 @@
 
 - [Production client onboarding](./production-client-onboarding.md): create an organization, invite users, upload and publish reports, and archive content.
 - [Bootstrap the first administrator](./bootstrap-first-admin.md): one-time production administrator setup.
+- [Add an administrator](./add-administrator.md): onboard an additional TOTP-protected administrator in development or production.
 - [Client login branding](./client-login-branding.md): apply the Cognito managed-login branding after creating or replacing a client user pool.
 - [Authentication testing](./authentication-testing.md): live Playwright session and tenant-isolation checks.
 - [Audit operations](./audit-operations.md): monthly export, retention, alarms, and recovery checks.
