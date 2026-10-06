@@ -4,11 +4,15 @@ import {
   AdminInitiateAuthCommand,
   AdminRespondToAuthChallengeCommand,
   CognitoIdentityProviderClient,
-  ListUsersCommand,
 } from "@aws-sdk/client-cognito-identity-provider";
 import { GetSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 
 import type { ClientTokenSet } from "./client";
+import {
+  cognitoUserExists,
+  normalizeLoginEmail,
+  type CognitoUserReader,
+} from "./cognito-user-pools";
 
 const cognito = new CognitoIdentityProviderClient({});
 const secrets = new SecretsManagerClient({});
@@ -19,13 +23,34 @@ export type PasswordLoginResult =
   | { kind: "mfa"; session: string }
   | { kind: "new-password"; session: string };
 
-async function inPool(userPoolId: string, email: string): Promise<boolean> {
-  const found = await cognito.send(new ListUsersCommand({
-    UserPoolId: userPoolId,
-    Filter: `email = "${email}"`,
-    Limit: 1,
-  }));
-  return (found.Users?.length ?? 0) > 0;
+type PasswordPoolConfig = Readonly<{
+  adminPoolId?: string;
+  adminClientId?: string;
+  clientPoolId?: string;
+  clientClientId?: string;
+}>;
+
+export async function resolvePasswordLoginPool(
+  reader: CognitoUserReader,
+  emailInput: string,
+  config: PasswordPoolConfig,
+): Promise<{ admin: boolean; userPoolId: string; clientId: string } | null> {
+  const email = normalizeLoginEmail(emailInput);
+  if (
+    config.clientPoolId &&
+    config.clientClientId &&
+    await cognitoUserExists(reader, config.clientPoolId, email)
+  ) {
+    return { admin: false, userPoolId: config.clientPoolId, clientId: config.clientClientId };
+  }
+  if (
+    config.adminPoolId &&
+    config.adminClientId &&
+    await cognitoUserExists(reader, config.adminPoolId, email)
+  ) {
+    return { admin: true, userPoolId: config.adminPoolId, clientId: config.adminClientId };
+  }
+  return null;
 }
 
 async function secretHash(username: string, clientId: string, secretArn: string): Promise<string> {
@@ -61,12 +86,10 @@ export async function passwordLogin(input: {
   clientClientId?: string;
   clientSecretArn?: string;
 }): Promise<PasswordLoginResult> {
-  const email = input.email.trim().toLowerCase();
-  const admin = Boolean(input.adminPoolId && input.adminClientId && await inPool(input.adminPoolId, email));
-  const client = !admin && Boolean(input.clientPoolId && input.clientClientId && await inPool(input.clientPoolId, email));
-  if (!admin && !client) throw new Error("unknown_account");
-  const userPoolId = admin ? input.adminPoolId! : input.clientPoolId!;
-  const clientId = admin ? input.adminClientId! : input.clientClientId!;
+  const email = normalizeLoginEmail(input.email);
+  const selected = await resolvePasswordLoginPool(cognito, email, input);
+  if (!selected) throw new Error("unknown_account");
+  const { admin, userPoolId, clientId } = selected;
   const hash = !admin && input.clientSecretArn
     ? await secretHash(email, clientId, input.clientSecretArn)
     : undefined;

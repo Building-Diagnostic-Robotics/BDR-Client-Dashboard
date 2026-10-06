@@ -14,6 +14,9 @@ export ADMIN_EMAIL="administrator@example.com"
 export ADMIN_POOL_ID="$(aws cloudformation describe-stacks \
   --stack-name "$PORTAL_STACK" --region "$AWS_REGION" \
   --query "Stacks[0].Outputs[?OutputKey=='AdminUserPoolId'].OutputValue | [0]" --output text)"
+export CLIENT_POOL_ID="$(aws cloudformation describe-stacks \
+  --stack-name "$PORTAL_STACK" --region "$AWS_REGION" \
+  --query "Stacks[0].Outputs[?OutputKey=='ClientUserPoolId'].OutputValue | [0]" --output text)"
 export ADMIN_API_URL="$(aws cloudformation describe-stacks \
   --stack-name "$PORTAL_STACK" --region "$AWS_REGION" \
   --query "Stacks[0].Outputs[?OutputKey=='AdminApiUrl'].OutputValue | [0]" --output text)"
@@ -38,6 +41,17 @@ Confirm the intended AWS account before continuing:
 ```bash
 aws sts get-caller-identity
 ```
+
+Confirm that the administrator email does not belong to the client pool:
+
+```bash
+aws cognito-idp admin-get-user \
+  --user-pool-id "$CLIENT_POOL_ID" \
+  --username "$ADMIN_EMAIL" \
+  --region "$AWS_REGION"
+```
+
+Continue only when Cognito returns `UserNotFoundException`.
 
 ## Create and enroll the administrator
 
@@ -159,6 +173,14 @@ npm run cli --workspace @bdr/portal-admin -- organizations list
 ```
 
 The command must succeed. Record the bootstrap in the change record, then securely remove the temporary transaction file. It contains identifiers and audit metadata, not passwords or TOTP secrets.
+
+Run the read-only overlap audit for the stack's environment:
+
+```bash
+npm run audit-email-overlap --workspace @bdr/infrastructure -- \
+  --environment production \
+  --region "$AWS_REGION"
+```
 
 If a record already exists or the transaction fails, stop and investigate. Do not edit existing identity, guard, or audit records to force this procedure through.
 

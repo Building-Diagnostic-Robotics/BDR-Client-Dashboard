@@ -1,4 +1,4 @@
-import { ListUsersCommand, CognitoIdentityProviderClient } from "@aws-sdk/client-cognito-identity-provider";
+import { CognitoIdentityProviderClient } from "@aws-sdk/client-cognito-identity-provider";
 import { artifactAccessRequestSchema, reportTypeSchema } from "@bdr/contracts";
 import { DomainError } from "@bdr/domain";
 import type {
@@ -8,6 +8,7 @@ import type {
 import { ZodError } from "zod";
 
 import { AdminPoolOAuth } from "./auth/admin-oauth";
+import { cognitoUserExists } from "./auth/cognito-user-pools";
 import { passwordLogin } from "./auth/password-login";
 import { CognitoClientOAuth, DynamoClientAuthStore, KmsTokenCipher, clientRuntimeConfig } from "./auth/aws-client";
 import { ClientAuthService, loginCookie, query } from "./auth/client";
@@ -212,16 +213,12 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return redirect(back);
         const adminPoolId = dependencies.adminIssuer?.split("/").pop();
         const clientPoolId = process.env.CLIENT_USER_POOL_ID;
-        const inPool = async (userPoolId: string) => {
-          const found = await cognito.send(new ListUsersCommand({
-            UserPoolId: userPoolId,
-            Filter: `email = "${email}"`,
-            Limit: 1,
-          }));
-          return (found.Users?.length ?? 0) > 0;
-        };
-        const useAdmin = Boolean(adminPoolId && dependencies.adminService && await inPool(adminPoolId));
-        const useClient = !useAdmin && Boolean(clientPoolId && await inPool(clientPoolId));
+        const useClient = Boolean(clientPoolId && await cognitoUserExists(cognito, clientPoolId, email));
+        const useAdmin = !useClient && Boolean(
+          adminPoolId &&
+          dependencies.adminService &&
+          await cognitoUserExists(cognito, adminPoolId, email),
+        );
         if (!useAdmin && !useClient) return redirect(back);
         const started = useAdmin
           ? await dependencies.adminService!.startLogin(returnTo, email)

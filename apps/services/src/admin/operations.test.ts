@@ -18,17 +18,21 @@ describe("Phase 5 registry operations", () => {
     });
     const cognito = vi.fn(async (command: { input: Record<string, unknown> }) => {
       cognitoInputs.push(command.input);
+      if (command.input.UserPoolId === "admin-pool") {
+        throw Object.assign(new Error("not found"), { name: "UserNotFoundException" });
+      }
       return { User: { Username: "generated-client-username", Attributes: [{ Name: "sub", Value: "client-sub" }] } };
     });
     const service = new AwsPortalAdminOperations(
-      { tables: { identity: "identity", tenantData: "tenant", adminControl: "admin", session: "session", audit: "audit" }, clientUserPoolId: "pool", clientIssuer: "https://issuer.example.com/pool" },
+      { tables: { identity: "identity", tenantData: "tenant", adminControl: "admin", session: "session", audit: "audit" }, adminUserPoolId: "admin-pool", clientUserPoolId: "pool", clientIssuer: "https://issuer.example.com/pool" },
       { dynamo: { send: dynamo } as never, cognito: { send: cognito } as never },
     );
 
     const invitation = await service.createInvitation(organizationId, { email: " Client@Example.com ", idempotencyKey: "request_0123456789abcdef" }, { active, requestId: "request" });
 
-    expect(cognitoInputs).toHaveLength(1);
-    expect(cognitoInputs[0]).toMatchObject({
+    expect(cognitoInputs).toHaveLength(2);
+    expect(cognitoInputs[0]).toMatchObject({ UserPoolId: "admin-pool", Username: "client@example.com" });
+    expect(cognitoInputs[1]).toMatchObject({
       UserPoolId: "pool",
       Username: "client@example.com",
       UserAttributes: expect.arrayContaining([{ Name: "email", Value: "client@example.com" }]),
@@ -64,22 +68,52 @@ describe("Phase 5 registry operations", () => {
     const cognitoInputs: Record<string, unknown>[] = [];
     const cognito = vi.fn(async (command: { input: Record<string, unknown> }) => {
       cognitoInputs.push(command.input);
-      if (cognitoInputs.length === 1) throw Object.assign(new Error("not found"), { name: "UserNotFoundException" });
+      if (command.input.UserPoolId === "admin-pool" || cognitoInputs.length === 2) {
+        throw Object.assign(new Error("not found"), { name: "UserNotFoundException" });
+      }
       return { User: { Username: "generated-client-username", Attributes: [{ Name: "sub", Value: "client-sub" }] } };
     });
     const service = new AwsPortalAdminOperations(
-      { tables: { identity: "identity", tenantData: "tenant", adminControl: "admin", session: "session", audit: "audit" }, clientUserPoolId: "pool", clientIssuer: "https://issuer.example.com/pool" },
+      { tables: { identity: "identity", tenantData: "tenant", adminControl: "admin", session: "session", audit: "audit" }, adminUserPoolId: "admin-pool", clientUserPoolId: "pool", clientIssuer: "https://issuer.example.com/pool" },
       { dynamo: { send: dynamo } as never, cognito: { send: cognito } as never },
     );
 
     const resent = await service.resendInvitation(organizationId, invitation.invitationId, { active, requestId: "request" });
 
-    expect(cognitoInputs).toHaveLength(2);
-    expect(cognitoInputs[0]).toMatchObject({ UserPoolId: "pool", Username: "client@example.com" });
+    expect(cognitoInputs).toHaveLength(3);
+    expect(cognitoInputs[0]).toMatchObject({ UserPoolId: "admin-pool", Username: "client@example.com" });
     expect(cognitoInputs[1]).toMatchObject({ UserPoolId: "pool", Username: "client@example.com" });
+    expect(cognitoInputs[2]).toMatchObject({ UserPoolId: "pool", Username: "client@example.com" });
     expect(resent).toMatchObject({ status: "PENDING", sub: "client-sub", cognitoUsername: "generated-client-username" });
     const invitationUpdate = transaction.find((action) => action.Update?.UpdateExpression?.includes("cognitoUsername"));
     expect(invitationUpdate?.Update?.ExpressionAttributeValues?.[":username"]).toBe("generated-client-username");
+  });
+
+  it("rejects a client invitation when the email belongs to an administrator", async () => {
+    let transactionAttempted = false;
+    const dynamo = vi.fn(async (command: { input: Record<string, unknown> }) => {
+      if (command.input.TableName === "tenant" && command.input.Key) {
+        return { Item: { organizationId, displayName: "Client", status: "ACTIVE", revision: "rev_org_0123456789" } };
+      }
+      if (command.input.Key) return {};
+      if (command.input.TransactItems) transactionAttempted = true;
+      return {};
+    });
+    const cognito = vi.fn(async () => ({ Username: "admin-user" }));
+    const service = new AwsPortalAdminOperations(
+      { tables: { identity: "identity", tenantData: "tenant", adminControl: "admin", session: "session", audit: "audit" }, adminUserPoolId: "admin-pool", clientUserPoolId: "pool", clientIssuer: "https://issuer.example.com/pool" },
+      { dynamo: { send: dynamo } as never, cognito: { send: cognito } as never },
+    );
+
+    await expect(service.createInvitation(
+      organizationId,
+      { email: "Admin@Example.com", idempotencyKey: "request_0123456789abcdef" },
+      { active, requestId: "request" },
+    )).rejects.toMatchObject({
+      code: "CONFLICT",
+      message: "This email already belongs to an administrator account",
+    });
+    expect(transactionAttempted).toBe(false);
   });
 
   it("creates a draft inspection and all four classifications in one transaction", async () => {
@@ -96,7 +130,7 @@ describe("Phase 5 registry operations", () => {
       throw new Error(`Unexpected command ${JSON.stringify(command.input)}`);
     });
     const service = new AwsPortalAdminOperations(
-      { tables: { identity: "identity", tenantData: "tenant", adminControl: "admin", session: "session", audit: "audit" }, clientUserPoolId: "pool", clientIssuer: "https://issuer.example.com/pool" },
+      { tables: { identity: "identity", tenantData: "tenant", adminControl: "admin", session: "session", audit: "audit" }, adminUserPoolId: "admin-pool", clientUserPoolId: "pool", clientIssuer: "https://issuer.example.com/pool" },
       { dynamo: { send } as never, cognito: { send: vi.fn() } as never },
     );
     const inspection = await service.createInspection(organizationId, projectId, { scannedAt: "2026-09-13T10:00:00-04:00", idempotencyKey: "request_0123456789abcdef" }, { active, requestId: "request" });

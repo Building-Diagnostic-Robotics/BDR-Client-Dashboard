@@ -32,6 +32,7 @@ export type AdminRuntimeConfig = AdminAuthConfig &
     auditTableName: string;
     tenantDataTableName: string;
     adminControlTableName: string;
+    adminUserPoolId: string;
     clientUserPoolId: string;
     clientIssuer: string;
     uploadPresignerFunctionName: string;
@@ -50,6 +51,7 @@ export function adminRuntimeConfig(environment = process.env): AdminRuntimeConfi
     auditTableName: required(environment.AUDIT_TABLE_NAME, "AUDIT_TABLE_NAME"),
     tenantDataTableName: required(environment.TENANT_DATA_TABLE_NAME, "TENANT_DATA_TABLE_NAME"),
     adminControlTableName: required(environment.ADMIN_CONTROL_TABLE_NAME, "ADMIN_CONTROL_TABLE_NAME"),
+    adminUserPoolId: required(environment.ADMIN_USER_POOL_ID, "ADMIN_USER_POOL_ID"),
     clientUserPoolId: required(environment.CLIENT_USER_POOL_ID, "CLIENT_USER_POOL_ID"),
     clientIssuer: required(environment.CLIENT_ISSUER, "CLIENT_ISSUER"),
     uploadPresignerFunctionName: required(environment.UPLOAD_PRESIGNER_FUNCTION_NAME, "UPLOAD_PRESIGNER_FUNCTION_NAME"),
