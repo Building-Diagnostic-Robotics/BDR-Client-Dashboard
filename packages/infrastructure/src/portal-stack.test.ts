@@ -185,6 +185,7 @@ describe("portal infrastructure", () => {
           Variables: Match.objectLike({
             ADMIN_AUTH_DOMAIN: Match.anyValue(),
             ADMIN_ISSUER: Match.anyValue(),
+            ADMIN_USER_POOL_ID: Match.anyValue(),
             CLIENT_USER_POOL_ID: Match.anyValue(),
             CLIENT_ISSUER: Match.anyValue(),
           }),
@@ -225,6 +226,17 @@ describe("portal infrastructure", () => {
     expect(JSON.stringify(adminPolicy?.Properties?.PolicyDocument)).toContain(
       "dynamodb:ConditionCheckItem",
     );
+    const adminStatements = adminPolicy?.Properties?.PolicyDocument?.Statement as Array<{
+      Action?: string | string[];
+      Resource?: unknown;
+    }>;
+    const adminPoolLookup = adminStatements.find(
+      (statement) =>
+        statement.Action === "cognito-idp:AdminGetUser" &&
+        JSON.stringify(statement.Resource).includes("AdminUserPool"),
+    );
+    expect(adminPoolLookup).toBeDefined();
+    expect(adminPoolLookup?.Action).toBe("cognito-idp:AdminGetUser");
     expect(JSON.stringify(clientBffPolicy?.Properties?.PolicyDocument)).toContain(
       "dynamodb:ConditionCheckItem",
     );

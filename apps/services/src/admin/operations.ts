@@ -48,6 +48,7 @@ import {
 import { z } from "zod";
 
 import type { ActiveAdmin } from "../auth/admin";
+import { cognitoUserExists } from "../auth/cognito-user-pools";
 
 const REPORT_TYPES: readonly ReportType[] = [
   "ASSESSMENT",
@@ -104,6 +105,7 @@ export interface PortalAdminOperations {
 
 export type AdminOperationsConfig = Readonly<{
   tables: Tables;
+  adminUserPoolId: string;
   clientUserPoolId: string;
   clientIssuer: string;
 }>;
@@ -160,6 +162,12 @@ export class AwsPortalAdminOperations implements PortalAdminOperations {
   ) {
     this.dynamo = clients.dynamo ?? DynamoDBDocumentClient.from(new DynamoDBClient({}), { marshallOptions: { removeUndefinedValues: true } });
     this.cognito = clients.cognito ?? new CognitoIdentityProviderClient({});
+  }
+
+  private async assertClientEmailAvailable(email: string): Promise<void> {
+    if (await cognitoUserExists(this.cognito, this.config.adminUserPoolId, email)) {
+      conflict("This email already belongs to an administrator account");
+    }
   }
 
   async listOrganizations(input: ListInput) {
@@ -233,6 +241,7 @@ export class AwsPortalAdminOperations implements PortalAdminOperations {
   async resendInvitation(organizationId: string, invitationId: string, context: ActionContext) {
     const invitation = await this.require(this.config.tables.adminControl, adminControlKeys.invitation(organizationId, invitationId), adminInvitationSchema);
     if (!["PENDING", "EXPIRED", "DELIVERY_FAILED"].includes(invitation.status)) invalidState("Accepted or cancelled invitations cannot be resent");
+    await this.assertClientEmailAvailable(invitation.normalizedEmail);
     let sub = invitation.sub;
     let cognitoUsername = invitation.sub ?? invitation.normalizedEmail;
     try {
@@ -514,6 +523,7 @@ export class AwsPortalAdminOperations implements PortalAdminOperations {
 
   private async issueInvitation(input: { organizationId: string; userId: string; email: string; invitationId: string; expectedUserRevision: string | null }, context: ActionContext): Promise<AdminInvitation> {
     const normalizedEmail = normalizeEmail(input.email);
+    await this.assertClientEmailAvailable(normalizedEmail);
     const pending: AdminInvitation = { invitationId: input.invitationId, organizationId: input.organizationId, userId: input.userId, email: input.email.trim(), normalizedEmail, status: "PENDING", absoluteExpiresAt: new Date(Date.now() + INVITATION_MS).toISOString(), ttlExpiresAt: null, acceptedAt: null, cognitoUsername: normalizedEmail, issuer: this.config.clientIssuer, sub: null, revision: revision() };
     await this.transact([
       this.condition(this.config.tables.tenantData, tenantKeys.organization(input.organizationId), "#status = :active", { ":active": "ACTIVE" }, { "#status": "status" }),

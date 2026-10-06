@@ -17,9 +17,10 @@ import {
   S3Client,
 } from "@aws-sdk/client-s3";
 import { DynamoDBDocumentClient, PutCommand, QueryCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
-import { identityKeys, tenantKeys } from "@bdr/domain";
+import { conflict, identityKeys, tenantKeys } from "@bdr/domain";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
+import { cognitoUserExists, normalizeLoginEmail } from "../auth/cognito-user-pools";
 import { readJsonObject, writeJsonObject, type JsonObjectSnapshot } from "./json-state";
 
 const s3 = new S3Client({});
@@ -74,6 +75,28 @@ async function listChildren(prefix: string): Promise<string[]> {
 }
 
 export const PORTAL_ADMIN_ORGANIZATION_ID = "bdr_portal_admins";
+
+async function assertClientEmailAvailable(
+  cognito: CognitoIdentityProviderClient,
+  email: string,
+): Promise<void> {
+  const adminPoolId = process.env.ADMIN_ISSUER?.split("/").pop();
+  if (!adminPoolId) throw new Error("missing_configuration");
+  if (await cognitoUserExists(cognito, adminPoolId, email)) {
+    conflict("This email already belongs to an administrator account");
+  }
+}
+
+async function assertAdminEmailAvailable(
+  cognito: CognitoIdentityProviderClient,
+  email: string,
+): Promise<void> {
+  const clientPoolId = process.env.CLIENT_USER_POOL_ID;
+  if (!clientPoolId) throw new Error("missing_configuration");
+  if (await cognitoUserExists(cognito, clientPoolId, email)) {
+    conflict("This email already belongs to a client account");
+  }
+}
 
 export async function grantPortalAdmin(organizationId: string): Promise<void> {
   const snapshot = await readJsonVersion(LINKS_KEY);
@@ -224,12 +247,15 @@ export async function ownsPrefix(organizationId: string | null, admin: boolean, 
   return roots.some((root) => normalized === root || normalized.startsWith(`${root}/`));
 }
 
-export async function createPortalAdmin(emailInput: string): Promise<{ email: string }> {
-  const email = emailInput.trim().toLowerCase();
+export async function createPortalAdmin(
+  emailInput: string,
+  cognito = new CognitoIdentityProviderClient({}),
+): Promise<{ email: string }> {
+  const email = normalizeLoginEmail(emailInput);
   if (!email.includes("@")) throw new Error("invalid_request");
   const poolId = process.env.ADMIN_ISSUER?.split("/").pop();
   if (!poolId) throw new Error("missing_configuration");
-  const cognito = new CognitoIdentityProviderClient({});
+  await assertAdminEmailAvailable(cognito, email);
   try {
     await cognito.send(new AdminCreateUserCommand({
       UserPoolId: poolId,
@@ -251,8 +277,11 @@ export async function createPortalAdmin(emailInput: string): Promise<{ email: st
   return { email };
 }
 
-export async function createClientAccount(input: { email: string; clientPrefix: string }): Promise<{ email: string; organizationId: string }> {
-  const email = input.email.trim().toLowerCase();
+export async function createClientAccount(
+  input: { email: string; clientPrefix: string },
+  cognito = new CognitoIdentityProviderClient({}),
+): Promise<{ email: string; organizationId: string }> {
+  const email = normalizeLoginEmail(input.email);
   const clientPrefix = input.clientPrefix.replace(/^\/+|\/+$/g, "").split("/")[0] ?? "";
   if (!email.includes("@") || !clientPrefix || SKIP_PREFIXES.has(clientPrefix)) throw new Error("invalid_request");
   const poolId = process.env.CLIENT_USER_POOL_ID;
@@ -260,7 +289,7 @@ export async function createClientAccount(input: { email: string; clientPrefix: 
   const identityTable = process.env.IDENTITY_TABLE_NAME;
   const tenantTable = process.env.TENANT_DATA_TABLE_NAME;
   if (!poolId || !issuer || !identityTable || !tenantTable) throw new Error("missing_configuration");
-  const cognito = new CognitoIdentityProviderClient({});
+  await assertClientEmailAvailable(cognito, email);
   let sub: string | undefined;
   let username = email;
   try {
@@ -375,22 +404,34 @@ export function clientUserStatus(
   return cognitoUser.UserStatus === "FORCE_CHANGE_PASSWORD" ? "INVITED" : "ACTIVE";
 }
 
-export async function resendClientInvite(clientPrefix: string, email: string): Promise<void> {
+export async function resendClientInvite(
+  clientPrefix: string,
+  email: string,
+  cognito = new CognitoIdentityProviderClient({}),
+): Promise<void> {
   const match = (await listClientUsers(clientPrefix)).find((user) => user.email.toLowerCase() === email.trim().toLowerCase());
   if (!match || match.status !== "INVITED") throw new Error("invalid_request");
   const poolId = process.env.CLIENT_USER_POOL_ID;
   if (!poolId) throw new Error("missing_configuration");
-  await new CognitoIdentityProviderClient({}).send(new AdminCreateUserCommand({
+  const normalizedEmail = normalizeLoginEmail(email);
+  await assertClientEmailAvailable(cognito, normalizedEmail);
+  await cognito.send(new AdminCreateUserCommand({
     UserPoolId: poolId,
-    Username: email.trim().toLowerCase(),
+    Username: normalizedEmail,
     MessageAction: "RESEND",
     DesiredDeliveryMediums: ["EMAIL"],
   }));
 }
 
-export async function replaceClientEmail(clientPrefix: string, email: string, nextEmail: string): Promise<void> {
+export async function replaceClientEmail(
+  clientPrefix: string,
+  email: string,
+  nextEmail: string,
+  cognito = new CognitoIdentityProviderClient({}),
+): Promise<void> {
+  await assertClientEmailAvailable(cognito, normalizeLoginEmail(nextEmail));
   await revokeClientUser(clientPrefix, email);
-  await createClientAccount({ email: nextEmail, clientPrefix });
+  await createClientAccount({ email: nextEmail, clientPrefix }, cognito);
 }
 
 export async function howToReadFor(clientPrefix: string): Promise<{ published: boolean; history: number }> {

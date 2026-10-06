@@ -4,6 +4,7 @@ History of this repository from `git log` (newest first). Merge commits are omit
 
 ## Unreleased
 
+- Enforce one-email-one-Cognito-pool across client and administrator provisioning, resolve dashboard sign-ins client-first with administrator fallback, preflight client email replacements before revocation, and add a read-only cross-pool overlap audit.
 - Harden shared S3 JSON state reads so only missing objects produce empty initial state; malformed data, missing ETags, permission errors, throttling, network failures, and S3 server errors now fail closed instead of risking destructive overwrites.
 - Add optimistic concurrency control for dashboard writes to `org_links.json` and building `status.json` using S3 ETags, return HTTP 409 for stale writes, and reload current data before an administrator retries a conflicting change.
 - Tighten password-session token handling, align strict TypeScript contracts, update restored-session browser fixtures for the shared-building API, and preserve dashboard logo proportions.

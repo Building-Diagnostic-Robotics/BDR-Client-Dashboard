@@ -207,6 +207,7 @@ export const handler: HttpHandler = async (event) => {
     const auth = new AdminAuthService(config, new DynamoAdminAuthStore(config), new CognitoAdminVerifier());
     const operations = new AwsPortalAdminOperations({
       tables: { identity: config.identityTableName, tenantData: config.tenantDataTableName, adminControl: config.adminControlTableName, session: config.sessionTableName, audit: config.auditTableName },
+      adminUserPoolId: config.adminUserPoolId,
       clientUserPoolId: config.clientUserPoolId,
       clientIssuer: config.clientIssuer,
     });

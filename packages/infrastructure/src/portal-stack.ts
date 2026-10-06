@@ -113,7 +113,6 @@ export class PortalStack extends Stack {
     functions.clientBff.addToRolePolicy(
       new iam.PolicyStatement({
         actions: [
-          "cognito-idp:ListUsers",
           "cognito-idp:AdminInitiateAuth",
           "cognito-idp:AdminRespondToAuthChallenge",
           "cognito-idp:AdminCreateUser",
@@ -133,6 +132,7 @@ export class PortalStack extends Stack {
       "ADMIN_ISSUER",
       `https://cognito-idp.${this.region}.amazonaws.com/${identity.adminUserPool.userPoolId}`,
     );
+    functions.adminApi.addEnvironment("ADMIN_USER_POOL_ID", identity.adminUserPool.userPoolId);
     functions.adminApi.addEnvironment("UPLOAD_PRESIGNER_FUNCTION_NAME", functions.uploadPresigner.functionName);
     functions.adminApi.addEnvironment("PUBLISHER_FUNCTION_NAME", functions.publisher.functionName);
     functions.adminApi.addEnvironment("MAX_UPLOAD_BYTES", String(100 * 1024 * 1024));
@@ -154,6 +154,12 @@ export class PortalStack extends Stack {
           "cognito-idp:AdminUserGlobalSignOut",
         ],
         resources: [identity.clientUserPool.userPoolArn],
+      }),
+    );
+    functions.adminApi.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["cognito-idp:AdminGetUser"],
+        resources: [identity.adminUserPool.userPoolArn],
       }),
     );
 

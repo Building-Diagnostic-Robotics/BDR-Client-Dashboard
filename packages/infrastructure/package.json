@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "audit-email-overlap": "node bin/audit-cognito-email-overlap.mjs",
     "brand-client-login": "node bin/brand-client-login.mjs",
     "build": "tsc --noEmit -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
