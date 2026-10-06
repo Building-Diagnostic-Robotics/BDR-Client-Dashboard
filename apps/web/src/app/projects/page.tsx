@@ -79,7 +79,8 @@ function clientName(prefix: string): string {
 }
 
 function ProjectsPageContent() {
-  const { organization } = usePortal();
+  const { organization, admin: portalAdmin } = usePortal();
+  const admin = Boolean(portalAdmin);
   const requestedClient = useSearchParams().get("client");
   const [state, setState] = useState<PageState>({ status: "loading" });
   const [guideState, setGuideState] = useState<GuideState>({ status: "loading" });
@@ -89,69 +90,66 @@ function ProjectsPageContent() {
   const [scanFrom, setScanFrom] = useState("");
   const [scanTo, setScanTo] = useState("");
   const [selectedClient, setSelectedClient] = useState<string | null>(requestedClient);
-  const [admin, setAdmin] = useState(false);
 
   useEffect(() => {
     let active = true;
 
-    async function load() {
+    async function loadProjects() {
       try {
-        const [projectsRes, guideRes] = await Promise.allSettled([
-          getClient("/bff/portal/buildings", asBuildings),
-          getClient("/bff/portal/how-to-read/current", asGuideMetadata),
-        ]);
-
+        const projects = await getClient("/bff/portal/buildings", asBuildings);
         if (!active) return;
-
-        if (projectsRes.status === "rejected") {
-          const reason = projectsRes.reason;
-          if (reason instanceof ClientApiError && reason.status === 401) {
-            window.location.reload();
-            return;
-          }
-          setState({
-            status: "error",
-            message: "We could not load your projects. Please try again.",
-          });
-        } else {
-          setAdmin(projectsRes.value.admin);
-          setState({ status: "ready", projects: projectsRes.value.items });
+        setState({ status: "ready", projects: projects.items });
+      } catch (reason) {
+        if (!active) return;
+        if (reason instanceof ClientApiError && reason.status === 401) {
+          window.location.reload();
+          return;
         }
+        setState({
+          status: "error",
+          message: "We could not load your projects. Please try again.",
+        });
+      }
+    }
 
-        if (guideRes.status === "fulfilled") {
-          setGuideState({ status: "ready", guide: guideRes.value });
-        } else {
-          const reason = guideRes.reason;
-          if (reason instanceof ClientApiError && reason.status === 404) {
-            setGuideState({ status: "ready", guide: null });
-          } else {
-            setGuideState({ status: "error" });
-          }
+    async function loadGuide() {
+      try {
+        const guide = await getClient("/bff/portal/how-to-read/current", asGuideMetadata);
+        if (active) setGuideState({ status: "ready", guide });
+      } catch (reason) {
+        if (!active) return;
+        if (reason instanceof ClientApiError && reason.status === 401) {
+          window.location.reload();
+          return;
         }
-      } catch {
-        if (active) {
-          setState({
-            status: "error",
-            message: "We could not load your projects. Please try again.",
-          });
+        if (reason instanceof ClientApiError && reason.status === 404) {
+          setGuideState({ status: "ready", guide: null });
+        } else {
+          setGuideState({ status: "error" });
         }
       }
     }
 
-    void load();
+    void loadProjects();
+    if (admin) {
+      setGuideState({ status: "ready", guide: null });
+    } else {
+      void loadGuide();
+    }
     return () => {
       active = false;
     };
-  }, []);
+  }, [admin]);
 
   // ---------------------------------------------------------------------------
   // Client View
   // ---------------------------------------------------------------------------
-  if (!admin && state.status === "ready") {
+  if (!admin) {
     const q = searchQuery.trim().toLowerCase();
+    const projects = state.status === "ready" ? state.projects : [];
     const filteredProjects = !q
-      ? state.projects
-      : state.projects.filter(
+      ? projects
+      : projects.filter(
           (project) =>
             project.displayName.toLowerCase().includes(q) ||
             project.address.toLowerCase().includes(q),
@@ -164,67 +162,82 @@ function ProjectsPageContent() {
           description={`Inspection reports and building information for ${organization.displayName}.`}
         />
 
-        <section aria-labelledby="buildings-title">
-          <SectionHeader
-            title="Buildings"
-            titleId="buildings-title"
-            count={state.projects.length}
-            countLabel={`${state.projects.length} buildings`}
-          >
-            {state.projects.length > 0 ? (
-              <SearchBar
-                value={searchQuery}
-                onChange={setSearchQuery}
-                placeholder="Search by building name or address…"
-                ariaLabel="Search buildings"
-              />
-            ) : null}
-          </SectionHeader>
+        {state.status === "loading" ? (
+          <ContentState status="loading" message="Loading projects…" />
+        ) : null}
 
-          {state.projects.length === 0 ? (
-            <EmptyState
-              title="No projects available"
-              description="Your published building projects will appear here."
-            />
-          ) : filteredProjects.length === 0 ? (
-            <EmptyState
-              isSearch
-              title="No matching buildings"
-              description={
-                <>
-                  No buildings match &ldquo;{searchQuery}&rdquo;. Check the
-                  spelling or try another search term.
-                </>
-              }
-              onClearSearch={() => setSearchQuery("")}
-            />
-          ) : (
-            <div className="project-grid">
-              {filteredProjects.map((project) => {
-                const reportsStatus = formatBuildingReportsStatus(
-                  project.readyReports,
-                  project.latestReportUpdate,
-                  project.timeZone,
-                );
-                const scanDateText = formatBuildingScanDate(
-                  project.scanTime,
-                  project.timeZone,
-                );
-                return (
-                  <BuildingCard
-                    key={project.buildingPrefix}
-                    href={`/buildings/view?prefix=${encodeURIComponent(project.buildingPrefix)}`}
-                    displayName={project.displayName}
-                    address={project.address}
-                    scanDateText={scanDateText}
-                    reportsStatusText={reportsStatus.text}
-                    reportsStatusIsNone={reportsStatus.isNone}
-                  />
-                );
-              })}
-            </div>
-          )}
-        </section>
+        {state.status === "error" ? (
+          <ContentState
+            status="error"
+            title="Projects unavailable"
+            message={state.message}
+            onRetry={() => window.location.reload()}
+          />
+        ) : null}
+
+        {state.status === "ready" ? (
+          <section aria-labelledby="buildings-title">
+            <SectionHeader
+              title="Buildings"
+              titleId="buildings-title"
+              count={projects.length}
+              countLabel={`${projects.length} buildings`}
+            >
+              {projects.length > 0 ? (
+                <SearchBar
+                  value={searchQuery}
+                  onChange={setSearchQuery}
+                  placeholder="Search by building name or address…"
+                  ariaLabel="Search buildings"
+                />
+              ) : null}
+            </SectionHeader>
+
+            {projects.length === 0 ? (
+              <EmptyState
+                title="No projects available"
+                description="Your published building projects will appear here."
+              />
+            ) : filteredProjects.length === 0 ? (
+              <EmptyState
+                isSearch
+                title="No matching buildings"
+                description={
+                  <>
+                    No buildings match &ldquo;{searchQuery}&rdquo;. Check the
+                    spelling or try another search term.
+                  </>
+                }
+                onClearSearch={() => setSearchQuery("")}
+              />
+            ) : (
+              <div className="project-grid">
+                {filteredProjects.map((project) => {
+                  const reportsStatus = formatBuildingReportsStatus(
+                    project.readyReports,
+                    project.latestReportUpdate,
+                    project.timeZone,
+                  );
+                  const scanDateText = formatBuildingScanDate(
+                    project.scanTime,
+                    project.timeZone,
+                  );
+                  return (
+                    <BuildingCard
+                      key={project.buildingPrefix}
+                      href={`/buildings/view?prefix=${encodeURIComponent(project.buildingPrefix)}`}
+                      displayName={project.displayName}
+                      address={project.address}
+                      scanDateText={scanDateText}
+                      reportsStatusText={reportsStatus.text}
+                      reportsStatusIsNone={reportsStatus.isNone}
+                    />
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        ) : null}
 
         {guideState.status === "error" ? (
           <HowToReadBanner error />

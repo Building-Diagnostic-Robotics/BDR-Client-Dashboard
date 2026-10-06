@@ -4,6 +4,9 @@ History of this repository from `git log` (newest first). Merge commits are omit
 
 ## Unreleased
 
+- Fix shared-building address fallback so `general_data.json` supplies a missing address even when `status.json` already has a display name; retain `No address yet` when neither source contains a verified value.
+- Speed up the projects landing page by using a lean S3 summary read instead of full building-detail enrichment, loading the How to Read guide independently, and recording non-sensitive S3 operation and duration metrics.
+- Rename the client navigation item from Buildings to Projects and underline only the navigation item selected for the current route.
 - Restore the client landing page on `/projects`: branch client view from administrator view using the authenticated `admin` flag. Clients receive "Your projects", an organization description, a single building/address search bar, a 2-column grid, restored building cards linking to `/buildings/view?prefix=...`, and the shared How to Read guide banner beneath the grid.
 - Formalize design tokens in `apps/web/src/app/tokens.css` (spacing scale, typography scale, border radii, borders, and semantic colors) and import at the top of `globals.css`.
 - Standardize page templates and reusable UI primitives in `apps/web/src/components/` (`PageHeader`, `SectionHeader`, `SearchBar`, `EmptyState`, `ContentState`, `BuildingCard`, `HowToReadBanner`, `CountBadge`) to prevent unbounded growth of `globals.css`.

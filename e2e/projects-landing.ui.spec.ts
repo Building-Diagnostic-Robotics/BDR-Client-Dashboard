@@ -36,7 +36,7 @@ const clientBuildingC = {
 const clientBuildingD = {
   buildingPrefix: "org-a/robot-2/2026-08-10/delta-plaza/",
   displayName: "Delta Plaza",
-  address: "990 Commercial Way",
+  address: "",
   scanTime: "invalid-date",
   uploadTime: null,
   timeZone: null,
@@ -91,6 +91,9 @@ test.describe("Client Landing Page UI", () => {
     // 1. Heading and description
     await expect(page.getByRole("heading", { name: "Your projects", exact: true, level: 1 })).toBeVisible();
     await expect(page.getByText("Inspection reports and building information for Midland Holdings.")).toBeVisible();
+    const navigation = page.getByRole("navigation", { name: "Primary navigation" });
+    await expect(navigation.getByRole("link", { name: "Projects" })).toHaveAttribute("aria-current", "page");
+    await expect(navigation.locator('a[aria-current="page"]')).toHaveCount(1);
 
     // 2. Section title and count badge
     await expect(page.getByRole("heading", { name: "Buildings", exact: true, level: 2 })).toBeVisible();
@@ -124,6 +127,7 @@ test.describe("Client Landing Page UI", () => {
     // Building D: no ready reports -> No reports yet; invalid scanTime -> No scans yet
     const deltaCard = page.locator('a.project-card', { hasText: 'Delta Plaza' });
     await expect(deltaCard).toBeVisible();
+    await expect(deltaCard.getByText("No address yet")).toBeVisible();
     await expect(deltaCard.getByText("No reports yet")).toBeVisible();
     await expect(deltaCard.getByText("No scans yet")).toBeVisible();
 
@@ -176,6 +180,60 @@ test.describe("Client Landing Page UI", () => {
     await expect(page.getByRole("heading", { name: "How to Read Your BDR Reports" })).toHaveCount(0);
   });
 
+  test("renders building cards without waiting for How to Read metadata", async ({ page }) => {
+    let releaseGuide!: () => void;
+    const guidePending = new Promise<void>((resolve) => {
+      releaseGuide = resolve;
+    });
+    await page.route("**/bff/**", async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/bff/auth/session") {
+        await route.fulfill({ json: { authenticated: true } });
+      } else if (path === "/bff/me") {
+        await route.fulfill({ json: { organization: { displayName: "Midland Holdings" }, admin: false } });
+      } else if (path === "/bff/portal/buildings") {
+        await route.fulfill({ json: { items: [clientBuildingA], admin: false } });
+      } else if (path === "/bff/portal/how-to-read/current") {
+        await guidePending;
+        await route.fulfill({ json: { updatedAt: "2026-09-20T10:00:00.000Z" } });
+      } else {
+        await route.fulfill({ status: 404, json: { error: "not_found" } });
+      }
+    });
+
+    await page.goto("/projects");
+    await expect(page.getByRole("heading", { name: "Alpha Tower" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "How to Read Your BDR Reports" })).toHaveCount(0);
+    releaseGuide();
+    await expect(page.getByRole("heading", { name: "How to Read Your BDR Reports" })).toBeVisible();
+  });
+
+  test("marks exactly one client navigation item active across project routes", async ({ page }) => {
+    await page.route("**/bff/**", async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/bff/auth/session") {
+        await route.fulfill({ json: { authenticated: true } });
+      } else if (path === "/bff/me") {
+        await route.fulfill({ json: { organization: { displayName: "Midland Holdings" }, admin: false } });
+      } else if (path === "/bff/portal/building") {
+        await route.fulfill({
+          json: { displayName: "Alpha Tower", address: "100 Main Street", reports: {}, released: false },
+        });
+      } else {
+        await route.fulfill({ status: 404, json: { error: "not_found" } });
+      }
+    });
+
+    await page.goto("/how-to");
+    const navigation = page.getByRole("navigation", { name: "Primary navigation" });
+    await expect(navigation.getByRole("link", { name: "How to use" })).toHaveAttribute("aria-current", "page");
+    await expect(navigation.locator('a[aria-current="page"]')).toHaveCount(1);
+
+    await page.goto("/buildings/view?prefix=org-a%2Frobot-1%2F2026-09-15%2Falpha-tower%2F");
+    await expect(navigation.getByRole("link", { name: "Projects" })).toHaveAttribute("aria-current", "page");
+    await expect(navigation.locator('a[aria-current="page"]')).toHaveCount(1);
+  });
+
   test("shows compact error when How to Read guide fails unexpectedly without blocking buildings", async ({ page }) => {
     await page.route("**/bff/**", async (route) => {
       const path = new URL(route.request().url()).pathname;
@@ -222,5 +280,8 @@ test.describe("Client Landing Page UI", () => {
     // Administrator shows Clients view
     await expect(page.getByRole("heading", { name: "Clients", exact: true, level: 1 })).toBeVisible();
     await expect(page.getByText("Choose a client. Create a client and send invites from Organization tools.")).toBeVisible();
+    const navigation = page.getByRole("navigation", { name: "Primary navigation" });
+    await expect(navigation.getByRole("link", { name: "Clients" })).toHaveAttribute("aria-current", "page");
+    await expect(navigation.locator('a[aria-current="page"]')).toHaveCount(1);
   });
 });

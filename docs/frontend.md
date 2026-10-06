@@ -14,7 +14,7 @@ Set `CLIENT_BFF_API_URL` to the Client BFF origin when the API is not already be
 
 `src/lib/client-api.ts` is the only browser API helper. `getClient` and `postClient` send credentials, refuse cached responses, and parse the body with the schema passed by the caller. Posts read the CSRF cookie (`__Host-bdr_csrf`, or `bdr_csrf` outside that host-only form) and send it as `x-bdr-csrf`. `loginPath` only accepts a same-site relative return path.
 
-The shell shows a different nav for portal administrators (`me.admin`): Clients, Review, Organization tools, and How to use. Clients see Buildings and How to use.
+The shell shows a different nav for portal administrators (`me.admin`): Clients, Review, Organization tools, and How to use. Clients see Projects and How to use. Exactly one item receives `aria-current="page"` and the active underline based on the current route.
 
 ## Routes
 
@@ -23,7 +23,7 @@ The shell shows a different nav for portal administrators (`me.admin`): Clients,
 | `/` | `src/app/page.tsx` | Redirects to `/projects`. |
 | `/sign-in` | `src/app/sign-in/page.tsx` | Email and password form. Posts to `/bff/auth/password` and stays on the page for an authenticator code or a new password. |
 | `/logged-out` | `src/app/logged-out/page.tsx` | Signed-out confirmation. |
-| `/projects` | `src/app/projects/page.tsx` | Building list from `GET /bff/portal/buildings`. Administrators pick a client first. Filters cover name, address, robot, report type, and scan dates. |
+| `/projects` | `src/app/projects/page.tsx` | Building list from `GET /bff/portal/buildings`. Clients search by building name or address; building cards load independently from the How to Read guide. Administrators pick a client first and retain the robot, report type, and scan-date filters. |
 | `/projects/[projectId]` | `src/app/projects/[projectId]/` | Published inspection history from the registry APIs, including per-report view/download and download-all. |
 | `/buildings` | `src/app/buildings/page.tsx` | Redirects to `/projects`. |
 | `/buildings/view` | `src/app/buildings/view/page.tsx` | One building, selected with `?prefix=`. Loads `GET /bff/portal/building`. Administrators approve or mark reports and hide or restore report history. Clients can edit visible inputs. History stays on the page; clients see an empty list when the whole history is hidden. |
