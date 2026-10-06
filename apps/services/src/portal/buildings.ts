@@ -39,6 +39,7 @@ export type PortalBuilding = {
   buildingMark: string | null;
   legacy: boolean;
   mapReady: boolean;
+  latestReportUpdate: string | null;
 };
 
 function bucket(): string {
@@ -462,6 +463,26 @@ export async function commitHowToRead(clientPrefix: string, key: string): Promis
   await writeJson(LINKS_KEY, links, snapshot.eTag);
 }
 
+export async function currentHowToReadForOrg(
+  organizationId: string,
+): Promise<{ key: string; updatedAt: string } | null> {
+  const links = await readJson(LINKS_KEY);
+  const rows = orgRows(links);
+  const org = rows.find(
+    (row) => row.organizationId === organizationId || (row.clientPrefixes ?? []).some((p) => organizationIdFor(folderOf(p)) === organizationId),
+  );
+  if (!org || !org.howToReadKey) return null;
+  try {
+    const head = await s3.send(new HeadObjectCommand({ Bucket: bucket(), Key: org.howToReadKey }));
+    return {
+      key: org.howToReadKey,
+      updatedAt: head.LastModified?.toISOString() ?? new Date().toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function revokeClientUser(clientPrefix: string, email: string): Promise<void> {
   const users = await listClientUsers(clientPrefix);
   const match = users.find((user) => user.email.toLowerCase() === email.trim().toLowerCase());
@@ -619,9 +640,18 @@ export async function enrichPortalStatus(prefix: string, status: Record<string, 
   return status;
 }
 
-function summary(prefix: string, status: Record<string, unknown>): PortalBuilding {
+export function summary(prefix: string, status: Record<string, unknown>): PortalBuilding {
   const reports = status.reports && typeof status.reports === "object"
-    ? status.reports as Record<string, { clientVisible?: boolean; stale?: boolean; awaitingClientAdmin?: boolean }>
+    ? status.reports as Record<string, {
+        clientVisible?: boolean;
+        stale?: boolean;
+        awaitingClientAdmin?: boolean;
+        generatedAt?: string | null;
+        reportgenApprovedAt?: string | null;
+        clientApprovedAt?: string | null;
+        approvedAt?: string | null;
+        at?: string | null;
+      }>
     : {};
   const ready = Object.entries(reports)
     .filter(([, report]) => report?.clientVisible)
@@ -629,6 +659,21 @@ function summary(prefix: string, status: Record<string, unknown>): PortalBuildin
   const awaiting = Object.entries(reports)
     .filter(([, report]) => report?.awaitingClientAdmin && !report.stale && !report.clientVisible)
     .map(([name]) => name);
+
+  let newestTimestamp: string | null = null;
+  let newestMs = -Infinity;
+  for (const [, report] of Object.entries(reports)) {
+    if (!report?.clientVisible) continue;
+    const ts = report.generatedAt || report.reportgenApprovedAt || report.clientApprovedAt || report.approvedAt || report.at;
+    if (ts) {
+      const ms = new Date(ts).getTime();
+      if (!Number.isNaN(ms) && ms > newestMs) {
+        newestMs = ms;
+        newestTimestamp = new Date(ms).toISOString();
+      }
+    }
+  }
+
   const parts = prefix.replace(/\/$/, "").split("/");
   return {
     buildingPrefix: prefix,
@@ -643,6 +688,7 @@ function summary(prefix: string, status: Record<string, unknown>): PortalBuildin
     buildingMark: status.buildingMark ? String(status.buildingMark) : null,
     legacy: Boolean(status.legacyVisible),
     mapReady: Boolean(status.mapReady) && ready.some((name) => name === "ASSESSMENT" || name === "EVIDENCE"),
+    latestReportUpdate: newestTimestamp,
   };
 }
 
@@ -690,6 +736,25 @@ export async function loadPortalStatusVersion(prefix: string): Promise<PortalSta
 
 export async function signedRead(key: string): Promise<string> {
   return getSignedUrl(s3, new GetObjectCommand({ Bucket: bucket(), Key: key }), { expiresIn: 300 });
+}
+
+export async function signedReadWithDisposition(
+  key: string,
+  disposition: "VIEW" | "DOWNLOAD",
+  filename = "How-to-Read-Your-BDR-Reports.pdf",
+): Promise<{ url: string; expiresInSeconds: number }> {
+  const mode = disposition === "DOWNLOAD" ? "attachment" : "inline";
+  const command = new GetObjectCommand({
+    Bucket: bucket(),
+    Key: key,
+    ResponseContentType: "application/pdf",
+    ResponseCacheControl: "private, no-store",
+    ResponseContentDisposition: `${mode}; filename="${filename}"`,
+  });
+  return {
+    url: await getSignedUrl(s3, command, { expiresIn: 300 }),
+    expiresInSeconds: 300,
+  };
 }
 
 export async function signedUpload(key: string, contentType: string): Promise<string> {

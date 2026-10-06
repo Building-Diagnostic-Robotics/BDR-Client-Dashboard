@@ -5,6 +5,16 @@ import { DomainError, sha256 } from "@bdr/domain";
 import type { APIGatewayProxyEventV2 } from "aws-lambda";
 
 import { createClientBffHandler } from "./client-bff";
+import { currentHowToReadForOrg, signedReadWithDisposition } from "./portal/buildings";
+
+vi.mock("./portal/buildings", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./portal/buildings")>();
+  return {
+    ...actual,
+    currentHowToReadForOrg: vi.fn(),
+    signedReadWithDisposition: vi.fn(),
+  };
+});
 
 const csrf = "csrf-token";
 const identity: ClientIdentity = {
@@ -364,6 +374,76 @@ describe("client BFF routes", () => {
       error: "invalid_request",
       message: "Invalid reset confirmation details",
     });
+  });
+
+  it("returns 404 for GET /bff/portal/how-to-read/current when no guide exists", async () => {
+    vi.mocked(currentHowToReadForOrg).mockResolvedValueOnce(null);
+    const resources = {
+      policy: { loadActiveClientContext: vi.fn(async () => ({ organization: { organizationId: identity.organizationId } })) },
+    } as never;
+    const handler = createClientBffHandler({ portalOrigin: "https://portal.example.com", service: service(), resources });
+    const response = await handler(event("GET", "/bff/portal/how-to-read/current", {
+      headers: { "x-bdr-csrf": csrf },
+      cookies: [`__Host-bdr_client_session=session-id`],
+    }));
+    expect(response.statusCode).toBe(404);
+    expect(JSON.parse(response.body ?? "{}")).toEqual({ error: "not_found" });
+  });
+
+  it("returns 200 with updatedAt for GET /bff/portal/how-to-read/current when guide exists", async () => {
+    vi.mocked(currentHowToReadForOrg).mockResolvedValueOnce({
+      key: "reportgen_portal/how_to_read/org/guide.pdf",
+      updatedAt: "2026-10-01T12:00:00.000Z",
+    });
+    const resources = {
+      policy: { loadActiveClientContext: vi.fn(async () => ({ organization: { organizationId: identity.organizationId } })) },
+    } as never;
+    const handler = createClientBffHandler({ portalOrigin: "https://portal.example.com", service: service(), resources });
+    const response = await handler(event("GET", "/bff/portal/how-to-read/current", {
+      cookies: [`__Host-bdr_client_session=session-id`],
+    }));
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body ?? "{}")).toEqual({ updatedAt: "2026-10-01T12:00:00.000Z" });
+    expect(currentHowToReadForOrg).toHaveBeenCalledWith(identity.organizationId);
+  });
+
+  it("enforces CSRF and returns 403 on POST /bff/portal/how-to-read/current/access from evil origin", async () => {
+    const resources = {
+      policy: { loadActiveClientContext: vi.fn(async () => ({ organization: { organizationId: identity.organizationId } })) },
+    } as never;
+    const handler = createClientBffHandler({ portalOrigin: "https://portal.example.com", service: service(), resources });
+    const response = await handler(event("POST", "/bff/portal/how-to-read/current/access", {
+      body: JSON.stringify({ disposition: "VIEW" }),
+      headers: { origin: "https://evil.example.com", "x-bdr-csrf": csrf },
+      cookies: [`__Host-bdr_client_session=session-id`, `__Host-bdr_csrf=${csrf}`],
+    }));
+    expect(response.statusCode).toBe(403);
+  });
+
+  it("generates signed access for POST /bff/portal/how-to-read/current/access using session org", async () => {
+    vi.mocked(currentHowToReadForOrg).mockResolvedValueOnce({
+      key: "reportgen_portal/how_to_read/org/guide.pdf",
+      updatedAt: "2026-10-01T12:00:00.000Z",
+    });
+    vi.mocked(signedReadWithDisposition).mockResolvedValueOnce({
+      url: "https://s3.example.com/signed-guide.pdf",
+      expiresInSeconds: 300,
+    });
+    const resources = {
+      policy: { loadActiveClientContext: vi.fn(async () => ({ organization: { organizationId: identity.organizationId } })) },
+    } as never;
+    const handler = createClientBffHandler({ portalOrigin: "https://portal.example.com", service: service(), resources });
+    const response = await handler(event("POST", "/bff/portal/how-to-read/current/access", {
+      body: JSON.stringify({ disposition: "VIEW" }),
+      headers: { origin: "https://portal.example.com", "x-bdr-csrf": csrf },
+      cookies: [`__Host-bdr_client_session=session-id`, `__Host-bdr_csrf=${csrf}`],
+    }));
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body ?? "{}")).toEqual({
+      url: "https://s3.example.com/signed-guide.pdf",
+      expiresInSeconds: 300,
+    });
+    expect(signedReadWithDisposition).toHaveBeenCalledWith("reportgen_portal/how_to_read/org/guide.pdf", "VIEW");
   });
 });
 

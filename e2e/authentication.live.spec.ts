@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { clientMeResponseSchema } from "@bdr/contracts";
 
 const portalOrigin = () => new URL(process.env.PORTAL_E2E_BASE_URL!).origin;
-const dashboardHeading = (page: Page) => page.getByRole("heading", { name: "Buildings", exact: true, level: 1 });
+const dashboardHeading = (page: Page) => page.getByRole("heading", { name: "Your projects", exact: true, level: 1 });
 const signInHeading = (page: Page) => page.getByRole("heading", {
   name: "Sign In",
   exact: true,
