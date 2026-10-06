@@ -26,6 +26,11 @@ import { readJsonObject, writeJsonObject, type JsonObjectSnapshot } from "./json
 const s3 = new S3Client({});
 const LINKS_KEY = "reportgen_portal/org_links.json";
 
+type PortalListMetrics = {
+  getObjectCount: number;
+  listObjectCount: number;
+};
+
 export type PortalBuilding = {
   buildingPrefix: string;
   displayName: string;
@@ -48,12 +53,19 @@ function bucket(): string {
   return name;
 }
 
-async function readJsonVersion(key: string): Promise<JsonObjectSnapshot> {
+async function readJsonVersion(
+  key: string,
+  metrics?: PortalListMetrics,
+): Promise<JsonObjectSnapshot> {
+  if (metrics) metrics.getObjectCount += 1;
   return readJsonObject(s3, bucket(), key);
 }
 
-async function readJson(key: string): Promise<Record<string, unknown>> {
-  return (await readJsonVersion(key)).value;
+async function readJson(
+  key: string,
+  metrics?: PortalListMetrics,
+): Promise<Record<string, unknown>> {
+  return (await readJsonVersion(key, metrics)).value;
 }
 
 async function writeJson(
@@ -64,7 +76,8 @@ async function writeJson(
   await writeJsonObject(s3, bucket(), key, data, expectedETag);
 }
 
-async function listChildren(prefix: string): Promise<string[]> {
+async function listChildren(prefix: string, metrics?: PortalListMetrics): Promise<string[]> {
+  if (metrics) metrics.listObjectCount += 1;
   const response = await s3.send(new ListObjectsV2Command({
     Bucket: bucket(),
     ...(prefix ? { Prefix: prefix } : {}),
@@ -234,8 +247,8 @@ export async function renameClient(clientPrefix: string, displayName: string): P
   }));
 }
 
-async function allClientPrefixes(): Promise<string[]> {
-  const children = await listChildren("");
+async function allClientPrefixes(metrics?: PortalListMetrics): Promise<string[]> {
+  const children = await listChildren("", metrics);
   return children
     .map((prefix) => prefix.replace(/\/$/, ""))
     .filter((name) => name && !SKIP_PREFIXES.has(name));
@@ -505,9 +518,13 @@ export async function revokeClientUser(clientPrefix: string, email: string): Pro
   }));
 }
 
-export async function prefixesFor(organizationId: string | null, admin: boolean): Promise<string[]> {
-  if (admin) return allClientPrefixes();
-  const links = await readJson(LINKS_KEY);
+export async function prefixesFor(
+  organizationId: string | null,
+  admin: boolean,
+  metrics?: PortalListMetrics,
+): Promise<string[]> {
+  if (admin) return allClientPrefixes(metrics);
+  const links = await readJson(LINKS_KEY, metrics);
   const orgs = Array.isArray(links.organizations) ? links.organizations : [];
   const prefixes: string[] = [];
   for (const org of orgs) {
@@ -519,13 +536,13 @@ export async function prefixesFor(organizationId: string | null, admin: boolean)
   return prefixes;
 }
 
-async function buildingsUnder(clientPrefix: string): Promise<string[]> {
+async function buildingsUnder(clientPrefix: string, metrics?: PortalListMetrics): Promise<string[]> {
   const found: string[] = [];
-  const robots = await listChildren(`${clientPrefix}/`);
+  const robots = await listChildren(`${clientPrefix}/`, metrics);
   for (const robot of robots) {
-    const dates = await listChildren(robot);
+    const dates = await listChildren(robot, metrics);
     for (const date of dates) {
-      const buildings = await listChildren(date);
+      const buildings = await listChildren(date, metrics);
       found.push(...buildings.filter((prefix) => prefix.replace(/\/$/, "").split("/").length === 4));
     }
   }
@@ -564,12 +581,79 @@ async function findAsBuilt(root: string): Promise<string | null> {
   return null;
 }
 
-async function readFirst(keys: string[]): Promise<Record<string, unknown>> {
+async function readFirst(
+  keys: string[],
+  metrics?: PortalListMetrics,
+): Promise<Record<string, unknown>> {
   for (const key of keys) {
-    const data = await readJson(key);
+    const data = await readJson(key, metrics);
     if (Object.keys(data).length > 0) return data;
   }
   return {};
+}
+
+function nonEmptyString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized || null;
+}
+
+export function mergePortalListMetadata(
+  status: Record<string, unknown>,
+  general: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged = { ...status };
+  if (!nonEmptyString(merged.displayName)) {
+    const displayName = nonEmptyString(general.displayName)
+      ?? nonEmptyString(general.display_name)
+      ?? nonEmptyString(general.building_name)
+      ?? nonEmptyString(general.name);
+    if (displayName) merged.displayName = displayName;
+    else delete merged.displayName;
+  }
+  if (!nonEmptyString(merged.address)) {
+    const address = nonEmptyString(general.address) ?? nonEmptyString(general.location);
+    merged.address = address ?? "";
+  }
+  return merged;
+}
+
+async function portalListStatus(
+  prefix: string,
+  status: Record<string, unknown>,
+  metrics: PortalListMetrics,
+): Promise<Record<string, unknown>> {
+  let result = status;
+  if (!nonEmptyString(status.displayName) || !nonEmptyString(status.address)) {
+    const general = await readJson(`${prefix.replace(/\/?$/, "/")}general_data.json`, metrics);
+    result = mergePortalListMetadata(status, general);
+  }
+
+  if (nonEmptyString(result.scanTime) || Boolean(result.roofTakeoffOnly)) return result;
+
+  const root = prefix.replace(/\/?$/, "/");
+  const sectionPrefixes = (await listChildren(root, metrics)).filter((child) => {
+    const name = child.replace(root, "").replace(/\/$/, "");
+    return Boolean(name) && name !== "reportgen" && /section/i.test(name);
+  });
+  const sectionMetadata = await Promise.all(sectionPrefixes.map((child) => readFirst([
+    `${child}gnss_session.json`,
+    `${child}session_config.json`,
+  ], metrics)));
+
+  let earliestScan: string | null = null;
+  for (const metadata of sectionMetadata) {
+    const scanTime = nonEmptyString(metadata.collection_start_time)
+      ?? nonEmptyString(metadata.driver_boot_time);
+    if (scanTime && (!earliestScan || scanTime < earliestScan)) earliestScan = scanTime;
+    if (!nonEmptyString(result.timeZone)) {
+      const timeZone = nonEmptyString(metadata.timezone)
+        ?? nonEmptyString(metadata.timeZone)
+        ?? nonEmptyString(metadata.iana_timezone);
+      if (timeZone) result = { ...result, timeZone };
+    }
+  }
+  return earliestScan ? { ...result, scanTime: earliestScan } : result;
 }
 
 export async function enrichPortalStatus(prefix: string, status: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -693,28 +777,44 @@ export function summary(prefix: string, status: Record<string, unknown>): Portal
 }
 
 export async function listPortalBuildings(organizationId: string | null, admin: boolean): Promise<PortalBuilding[]> {
-  const prefixes = (await Promise.all(
-    (await prefixesFor(organizationId, admin)).map((clientPrefix) => buildingsUnder(clientPrefix)),
-  )).flat();
-  const rows = await Promise.all(prefixes.map(async (prefix) => {
-    const status = await readJson(`${prefix}reportgen/client_portal/status.json`);
-    if (!status.displayName) {
-      const general = await readJson(`${prefix}general_data.json`);
-      const name = general.displayName || general.display_name || general.building_name || general.name;
-      if (name) status.displayName = name;
-      const address = general.address || general.location;
-      if (address && !status.address) status.address = address;
-    }
-    if (!clientCanSee(status, organizationId, admin)) return null;
-    let enriched = status;
-    try {
-      enriched = await enrichPortalStatus(prefix, status);
-    } catch {
-      enriched = status;
-    }
-    return summary(prefix, enriched);
-  }));
-  return rows.filter((row): row is PortalBuilding => row !== null);
+  const startedAt = Date.now();
+  const metrics: PortalListMetrics = { getObjectCount: 0, listObjectCount: 0 };
+  let clientPrefixCount = 0;
+  let discoveredBuildingCount = 0;
+  let returnedBuildingCount = 0;
+  let outcome = "success";
+  try {
+    const clientPrefixes = await prefixesFor(organizationId, admin, metrics);
+    clientPrefixCount = clientPrefixes.length;
+    const prefixes = (await Promise.all(
+      clientPrefixes.map((clientPrefix) => buildingsUnder(clientPrefix, metrics)),
+    )).flat();
+    discoveredBuildingCount = prefixes.length;
+    const rows = await Promise.all(prefixes.map(async (prefix) => {
+      const status = await readJson(`${prefix}reportgen/client_portal/status.json`, metrics);
+      if (Object.keys(status).length === 0) return null;
+      if (!clientCanSee(status, organizationId, admin)) return null;
+      return summary(prefix, await portalListStatus(prefix, status, metrics));
+    }));
+    const visible = rows.filter((row): row is PortalBuilding => row !== null);
+    returnedBuildingCount = visible.length;
+    return visible;
+  } catch (error) {
+    outcome = "error";
+    throw error;
+  } finally {
+    console.info(JSON.stringify({
+      event: "portal_buildings_list",
+      outcome,
+      admin,
+      durationMs: Date.now() - startedAt,
+      clientPrefixCount,
+      discoveredBuildingCount,
+      returnedBuildingCount,
+      s3GetObjectCount: metrics.getObjectCount,
+      s3ListObjectCount: metrics.listObjectCount,
+    }));
+  }
 }
 
 export async function loadPortalStatus(prefix: string): Promise<Record<string, unknown>> {

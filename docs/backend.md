@@ -56,7 +56,7 @@ These routes live on the Client BFF. Reads return `404` when the session’s org
 
 | Route | Who | Purpose |
 | --- | --- | --- |
-| `GET /bff/portal/buildings` | Client or admin | Buildings visible to the caller. Each item includes `awaitingReports`, the report types still waiting for administrator approval. |
+| `GET /bff/portal/buildings` | Client or admin | Lean summaries for buildings visible to the caller. The collection read uses status metadata and an identity fallback from `general_data.json`; full report history, as-built discovery, and other detail enrichment remain on the single-building route. Each item includes `awaitingReports`, the report types still waiting for administrator approval. |
 | `GET /bff/portal/building` | Client or admin | One building’s status. Buildings marked `no_report` or `test_scan` are not shown to clients as approved reports. When history is hidden for the building, clients still receive the history list as empty. Clients do not receive `historyHidden`, `historyHideReason`, or `hiddenHistoryKeys`. Administrators receive those fields and every history row, with `hiddenFromClients` on a version that clients cannot see. |
 | `GET /bff/portal/file` | Client or admin | Short-lived read URL for an allowed key under a building the caller owns. Clients cannot open a history-only file while history is hidden, or a single version hidden from clients. The current approved file stays openable. |
 | `POST /bff/portal/building` | Client or admin | Building actions. Approval, history hide/restore, stale, and building marks require an administrator. Clients may edit identity and capital-plan inputs on a visible report, which marks that report stale. |

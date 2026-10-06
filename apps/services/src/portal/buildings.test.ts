@@ -1,3 +1,4 @@
+import { GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, S3Client } from "@aws-sdk/client-s3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -5,12 +6,15 @@ import {
   clientUserStatus,
   createClientAccount,
   createPortalAdmin,
+  listPortalBuildings,
+  mergePortalListMetadata,
   replaceClientEmail,
   summary,
 } from "./buildings";
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
 describe("shared building client visibility", () => {
@@ -98,6 +102,80 @@ describe("cross-pool email uniqueness", () => {
 });
 
 describe("shared building summary and latest report update", () => {
+  it("fills a missing status address from general data even when the status already has a name", () => {
+    expect(mergePortalListMetadata(
+      { displayName: "Main Tower", address: "" },
+      { displayName: "Ignored Name", address: "100 Main Street" },
+    )).toMatchObject({
+      displayName: "Main Tower",
+      address: "100 Main Street",
+    });
+  });
+
+  it("keeps explicit status identity metadata and does not fabricate a missing address", () => {
+    expect(mergePortalListMetadata(
+      { displayName: "Main Tower", address: "200 Current Street" },
+      { displayName: "Old Name", address: "100 Old Street" },
+    )).toMatchObject({
+      displayName: "Main Tower",
+      address: "200 Current Street",
+    });
+    expect(mergePortalListMetadata(
+      { displayName: "Main Tower", address: "   " },
+      {},
+    )).toMatchObject({
+      displayName: "Main Tower",
+      address: "",
+    });
+  });
+
+  it("lists card summaries without full report, history, or as-built enrichment", async () => {
+    vi.stubEnv("DATA_BUCKET_NAME", "portal-bucket");
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const jsonResponse = (value: Record<string, unknown>) => ({
+      ETag: '"etag"',
+      Body: { transformToString: vi.fn().mockResolvedValue(JSON.stringify(value)) },
+    });
+    const send = vi.spyOn(S3Client.prototype, "send").mockImplementation(async (command) => {
+      if (command instanceof ListObjectsV2Command) {
+        const prefix = String(command.input.Prefix ?? "");
+        const prefixes: Record<string, string[]> = {
+          "client/": ["client/robot/"],
+          "client/robot/": ["client/robot/2026-09-15/"],
+          "client/robot/2026-09-15/": ["client/robot/2026-09-15/main-tower/"],
+        };
+        return { CommonPrefixes: (prefixes[prefix] ?? []).map((Prefix) => ({ Prefix })) } as never;
+      }
+      if (command instanceof GetObjectCommand) {
+        const key = String(command.input.Key ?? "");
+        if (key === "reportgen_portal/org_links.json") {
+          return jsonResponse({ organizations: [{ organizationId: "org-client", clientPrefixes: ["client"] }] }) as never;
+        }
+        if (key.endsWith("reportgen/client_portal/status.json")) {
+          return jsonResponse({
+            displayName: "Main Tower",
+            scanTime: "2026-09-15T14:00:00-04:00",
+            reports: { ASSESSMENT: { clientVisible: true, generatedAt: "2026-09-16T12:00:00.000Z" } },
+          }) as never;
+        }
+        if (key.endsWith("general_data.json")) {
+          return jsonResponse({ address: "100 Main Street" }) as never;
+        }
+      }
+      throw new Error(`Unexpected S3 command: ${command.constructor.name}`);
+    });
+
+    await expect(listPortalBuildings("org-client", false)).resolves.toMatchObject([
+      {
+        displayName: "Main Tower",
+        address: "100 Main Street",
+        latestReportUpdate: "2026-09-16T12:00:00.000Z",
+      },
+    ]);
+    expect(send.mock.calls.some(([command]) => command instanceof HeadObjectCommand)).toBe(false);
+    expect(send.mock.calls.filter(([command]) => command instanceof GetObjectCommand)).toHaveLength(3);
+  });
+
   it("calculates latestReportUpdate using newest timestamp among client-visible reports", () => {
     const res = summary("client/robot/2026-09-17/building/", {
       displayName: "Main Tower",
@@ -150,4 +228,3 @@ describe("shared building summary and latest report update", () => {
     expect(res.readyReports).toEqual(["ASSESSMENT"]);
   });
 });
-

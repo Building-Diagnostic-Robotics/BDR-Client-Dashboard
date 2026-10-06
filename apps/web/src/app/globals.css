@@ -156,7 +156,11 @@ h3 {
   text-decoration: none;
 }
 
-.site-nav a::after {
+.site-nav a[aria-current="page"] {
+  color: var(--color-text-primary);
+}
+
+.site-nav a[aria-current="page"]::after {
   position: absolute;
   right: 0;
   bottom: 0.65rem;

@@ -8,6 +8,7 @@ import {
 } from "@bdr/contracts";
 import Image from "next/image";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 
 import { ClientApiError, getClient, loginPath, postClient } from "../lib/client-api";
@@ -26,6 +27,7 @@ function currentReturnPath(): string {
 }
 
 export function PortalShell({ children }: { children: ReactNode }) {
+  const pathname = usePathname();
   const [me, setMe] = useState<ClientMeResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
@@ -107,6 +109,12 @@ export function PortalShell({ children }: { children: ReactNode }) {
     );
   }
 
+  const projectsActive = pathname === "/projects"
+    || pathname.startsWith("/projects/")
+    || pathname === "/buildings"
+    || pathname.startsWith("/buildings/")
+    || pathname === "/map";
+
   return (
     <PortalContext.Provider value={me}>
       <a className="skip-link" href="#main-content">Skip to content</a>
@@ -125,15 +133,15 @@ export function PortalShell({ children }: { children: ReactNode }) {
           <nav className="site-nav" aria-label="Primary navigation">
             {me.admin ? (
               <>
-                <Link href="/projects">Clients</Link>
-                <Link href="/review">Review</Link>
-                <Link href="/admin-tools">Organization tools</Link>
-                <Link href="/how-to/admin">How to use</Link>
+                <Link href="/projects" aria-current={projectsActive ? "page" : undefined}>Clients</Link>
+                <Link href="/review" aria-current={pathname === "/review" ? "page" : undefined}>Review</Link>
+                <Link href="/admin-tools" aria-current={pathname === "/admin-tools" ? "page" : undefined}>Organization tools</Link>
+                <Link href="/how-to/admin" aria-current={pathname === "/how-to/admin" ? "page" : undefined}>How to use</Link>
               </>
             ) : (
               <>
-                <Link href="/projects">Buildings</Link>
-                <Link href="/how-to">How to use</Link>
+                <Link href="/projects" aria-current={projectsActive ? "page" : undefined}>Projects</Link>
+                <Link href="/how-to" aria-current={pathname === "/how-to" ? "page" : undefined}>How to use</Link>
               </>
             )}
           </nav>

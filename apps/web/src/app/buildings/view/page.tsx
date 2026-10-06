@@ -149,7 +149,7 @@ function BuildingView() {
 
   return (
     <section>
-      <p><Link className="button button--outline" href="/projects">{admin ? "Clients" : "Buildings"}</Link></p>
+      <p><Link className="button button--outline" href="/projects">{admin ? "Clients" : "Projects"}</Link></p>
       <header className="page-heading">
         <h1>{String(status?.displayName || "Building")}</h1>
         <p>{String(status?.address || "No address yet")}</p>
