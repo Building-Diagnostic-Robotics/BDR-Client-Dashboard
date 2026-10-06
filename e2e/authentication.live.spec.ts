@@ -1,31 +1,26 @@
 import { expect, test, type Page } from "@playwright/test";
-import { clientMeResponseSchema, clientProjectListResponseSchema } from "@bdr/contracts";
+import { clientMeResponseSchema } from "@bdr/contracts";
 
 const portalOrigin = () => new URL(process.env.PORTAL_E2E_BASE_URL!).origin;
-const authOrigin = () => new URL(process.env.PORTAL_E2E_AUTH_ORIGIN!).origin;
-
-// Classic Hosted UI duplicates IDs across hidden and visible responsive forms,
-// and its submit input has aria-label="submit" rather than "Sign in".
-const cognitoEmail = (page: Page) => page.locator('input[name="username"]:visible');
-const cognitoPassword = (page: Page) => page.locator('input[name="password"][type="password"]:visible');
-const cognitoSignIn = (page: Page) => page.locator('input[name="signInSubmitButton"][type="submit"]:visible');
-const cognitoRememberedSignIn = (page: Page) => page.getByRole("button", { name: /^sign in as /i });
+const dashboardHeading = (page: Page) => page.getByRole("heading", { name: "Buildings", exact: true, level: 1 });
+const signInHeading = (page: Page) => page.getByRole("heading", {
+  name: "Sign in with your email and password",
+  exact: true,
+});
 
 async function signIn(page: Page, other = false) {
   await page.goto("/projects");
-  await expect.poll(() => new URL(page.url()).origin).toBe(authOrigin());
-  const priorLoginUrl = page.url();
-  // Verify the exact trusted Cognito origin before entering credentials.
-  await cognitoEmail(page).fill(process.env[other ? "PORTAL_E2E_OTHER_EMAIL" : "PORTAL_E2E_CLIENT_EMAIL"]!);
-  await cognitoPassword(page).fill(process.env[other ? "PORTAL_E2E_OTHER_PASSWORD" : "PORTAL_E2E_CLIENT_PASSWORD"]!);
-  await cognitoSignIn(page).click();
-  await expect(page.getByRole("heading", { name: "Your projects", exact: true })).toBeVisible();
+  await expect(page).toHaveURL(/\/sign-in\?returnTo=%2Fprojects$/);
+  await expect(signInHeading(page)).toBeVisible();
+  await page.getByLabel("Email", { exact: true }).fill(process.env[other ? "PORTAL_E2E_OTHER_EMAIL" : "PORTAL_E2E_CLIENT_EMAIL"]!);
+  await page.getByLabel("Password", { exact: true }).fill(process.env[other ? "PORTAL_E2E_OTHER_PASSWORD" : "PORTAL_E2E_CLIENT_PASSWORD"]!);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(dashboardHeading(page)).toBeVisible();
   expect(new URL(page.url()).origin).toBe(portalOrigin());
   const expectedOrganization = process.env[other ? "PORTAL_E2E_OTHER_ORGANIZATION" : "PORTAL_E2E_CLIENT_ORGANIZATION"]?.trim();
   if (expectedOrganization) {
     expect((await me(page)).organization.displayName).toBe(expectedOrganization);
   }
-  return priorLoginUrl;
 }
 
 async function me(page: Page) {
@@ -34,12 +29,15 @@ async function me(page: Page) {
   return clientMeResponseSchema.parse(await response.json());
 }
 
-async function projects(page: Page) {
-  const response = await page.request.get("/bff/me/projects");
+async function buildings(page: Page, options: { requireAny?: boolean } = {}) {
+  const response = await page.request.get("/bff/portal/buildings");
   expect(response.status()).toBe(200);
-  const result = clientProjectListResponseSchema.parse(await response.json());
-  expect(result.items.length).toBeGreaterThan(0);
-  return result.items;
+  const result = await response.json() as { items?: Array<{ buildingPrefix?: unknown }> };
+  const items = Array.isArray(result.items)
+    ? result.items.filter((item): item is { buildingPrefix: string } => typeof item.buildingPrefix === "string")
+    : [];
+  if (options.requireAny) expect(items.length).toBeGreaterThan(0);
+  return items;
 }
 
 async function signOut(page: Page) {
@@ -56,19 +54,21 @@ test("fresh and remembered dashboard access use a secure opaque session", async 
   expect(session?.domain).toBe(new URL(portalOrigin()).hostname);
   expect(Boolean(session?.value && !session.value.includes("."))).toBe(true);
   await page.reload();
-  await expect(page.getByRole("heading", { name: "Your projects", exact: true })).toBeVisible();
+  await expect(dashboardHeading(page)).toBeVisible();
   expect(await me(page)).toEqual(before);
 });
 
-test("Back to the remembered Cognito login preserves the current dashboard session", async ({ page }) => {
-  const previousLogin = await signIn(page);
+test("Back to the custom sign-in page preserves the current dashboard session", async ({ page }) => {
+  await signIn(page);
   const before = await me(page);
   await page.goBack();
-  // Some engines replace redirect history. Reopening that same page reproduces the stale flow.
-  if (new URL(page.url()).origin !== authOrigin()) await page.goto(previousLogin);
-  await expect(cognitoRememberedSignIn(page)).toBeVisible();
-  await cognitoRememberedSignIn(page).click();
-  await expect(page.getByRole("heading", { name: "Your projects", exact: true })).toBeVisible();
+  if (!new URL(page.url()).pathname.startsWith("/sign-in")) {
+    await page.goto("/sign-in?returnTo=%2Fprojects");
+  }
+  await expect(signInHeading(page)).toBeVisible();
+  expect((await page.request.get("/bff/auth/session")).status()).toBe(200);
+  await page.goto("/projects");
+  await expect(dashboardHeading(page)).toBeVisible();
   expect(await me(page)).toEqual(before);
 });
 
@@ -76,7 +76,7 @@ test("a stale callback without a session offers manual retry rather than an auto
   const response = await page.goto("/bff/auth/callback?code=expired-test-code&state=expired-test-state");
   expect(response?.status()).toBe(401);
   await expect(page.getByRole("heading", { name: "Please sign in again" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Sign in again", exact: true })).toHaveAttribute("href", "/bff/auth/login?returnTo=%2Fprojects");
+  await expect(page.getByRole("link", { name: "Sign in again", exact: true })).toHaveAttribute("href", "/sign-in?returnTo=%2Fprojects");
   expect((await page.request.get("/bff/auth/session")).status()).toBe(401);
 });
 
@@ -94,31 +94,34 @@ test("logout revokes the session and Back cannot restore authenticated access", 
   await expect(page.getByRole("button", { name: "Sign out", exact: true })).toHaveCount(0);
   expect((await page.request.get("/bff/me")).status()).toBe(401);
   await page.goto("/projects");
-  await expect.poll(() => new URL(page.url()).origin).toBe(authOrigin());
-  await expect(cognitoEmail(page)).toBeVisible();
+  await expect(page).toHaveURL(/\/sign-in\?returnTo=%2Fprojects$/);
+  await expect(signInHeading(page)).toBeVisible();
 });
 
 test("logout in one tab denies access from a second tab", async ({ page, context }) => {
   await signIn(page);
   const second = await context.newPage();
   await second.goto("/projects");
-  await expect(second.getByRole("heading", { name: "Your projects", exact: true })).toBeVisible();
+  await expect(dashboardHeading(second)).toBeVisible();
   await signOut(page);
   expect((await second.request.get("/bff/me")).status()).toBe(401);
-  await second.reload();
-  await expect.poll(() => new URL(second.url()).origin).toBe(authOrigin());
+  await second.goto("/projects", { waitUntil: "commit" });
+  await expect(second).toHaveURL(/\/sign-in\?returnTo=%2Fprojects$/);
+  await expect(signInHeading(second)).toBeVisible();
   await expect(second.getByRole("button", { name: "Sign out", exact: true })).toHaveCount(0);
 });
 
 test("switching accounts cannot expose the previous organization's building", async ({ page }) => {
   await signIn(page);
   const first = await me(page);
-  const firstProject = (await projects(page))[0]!;
+  const firstBuilding = (await buildings(page, { requireAny: true }))[0]!;
   await signOut(page);
   await signIn(page, true);
   const second = await me(page);
   expect(second.organization.displayName).not.toBe(first.organization.displayName);
-  const otherProjects = await projects(page);
-  expect(otherProjects.some((project) => project.projectId === firstProject.projectId)).toBe(false);
-  expect([403, 404]).toContain((await page.request.get(`/bff/projects/${encodeURIComponent(firstProject.projectId)}`)).status());
+  const otherBuildings = await buildings(page);
+  expect(otherBuildings.some((building) => building.buildingPrefix === firstBuilding.buildingPrefix)).toBe(false);
+  expect([403, 404]).toContain((await page.request.get(
+    `/bff/portal/building?prefix=${encodeURIComponent(firstBuilding.buildingPrefix)}`,
+  )).status());
 });

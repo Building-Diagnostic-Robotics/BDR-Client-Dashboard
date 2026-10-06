@@ -4,6 +4,12 @@ History of this repository from `git log` (newest first). Merge commits are omit
 
 ## Unreleased
 
+- Harden shared S3 JSON state reads so only missing objects produce empty initial state; malformed data, missing ETags, permission errors, throttling, network failures, and S3 server errors now fail closed instead of risking destructive overwrites.
+- Add optimistic concurrency control for dashboard writes to `org_links.json` and building `status.json` using S3 ETags, return HTTP 409 for stale writes, and reload current data before an administrator retries a conflicting change.
+- Tighten password-session token handling, align strict TypeScript contracts, update restored-session browser fixtures for the shared-building API, and preserve dashboard logo proportions.
+- Fix production client and building discovery by granting the Client BFF bucket-level `s3:ListBucket` permission. This permits root discovery and lets missing optional S3 objects return `404` for the existing not-found handling, while object reads remain restricted to approved key patterns.
+- Update production authentication tests for the custom dashboard sign-in page and shared-building endpoints instead of the retired direct Cognito redirect and registry-project flow.
+- Make production logout and tenant-isolation tests deterministic across Chromium and WebKit by avoiding a reload/redirect race and allowing the secondary test organization to be empty while still denying access to the primary organization's building.
 - Fix shared-building visibility so an approved report makes its building available to the client, including existing records where `clientVisible` was set before the building release flag.
 - Re-enable an existing disabled Cognito client when an administrator explicitly invites that email again, and report disabled accounts as revoked instead of signed in.
 

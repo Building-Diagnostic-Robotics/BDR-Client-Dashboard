@@ -22,7 +22,7 @@ This starts the real Next.js frontend on `http://localhost:4300` and intercepts 
 
 Deploy the updated development AWS stack. For a local dashboard, set `CLIENT_BFF_API_URL` in `apps/web/.env.local` to the development stack's `ClientBffApiUrl` and run `npm run dev`. Deploy development with `portalOrigin=http://localhost:3000` so Cognito uses the matching callback. Alternatively deploy the updated frontend to the dedicated development site.
 
-Create two dedicated client accounts in different development organizations with distinct display names and at least one active building each. Complete their initial password changes before automated testing. Do not use production clients or administrator accounts.
+Create two dedicated client accounts in different development organizations with distinct display names. The primary organization must have at least one client-visible building. The secondary organization may be empty because the isolation test still verifies that it cannot list or directly access the primary organization's building; giving it its own building adds a useful positive fixture. Complete their initial password changes before automated testing. Do not use production clients or administrator accounts.
 
 ```bash
 cp .env.e2e.example .env.e2e.local
@@ -40,7 +40,7 @@ PORTAL_E2E_OTHER_EMAIL=second-test-client@example.com
 PORTAL_E2E_OTHER_PASSWORD=REPLACE_LOCALLY
 ```
 
-Use the dashboard base origin, not a Cognito login link. Use the exact development client Cognito origin for `PORTAL_E2E_AUTH_ORIGIN`; credentials are entered only after that origin is checked. The credentials file is Git-ignored. Do not send passwords in chat or commit them.
+Use the dashboard base origin, not a Cognito login link. Keep the exact development client Cognito origin in `PORTAL_E2E_AUTH_ORIGIN` so the configuration guard can reject mixed environments. Credentials are entered only on the dashboard's custom `/sign-in` page. The credentials file is Git-ignored. Do not send passwords in chat or commit them.
 
 ## Run live development browser tests
 
@@ -48,13 +48,13 @@ Use the dashboard base origin, not a Cognito login link. Use the exact developme
 npm run test:e2e:live
 ```
 
-Tests require all configuration instead of silently skipping. They use isolated browser contexts, one worker, no retries, and no saved login state, screenshots, videos, or traces. They exercise fresh/remembered login, stale Cognito navigation, retry without a session, logout and old-cookie replay, two tabs, and account isolation against real Cognito/BFF/frontend services. They create and revoke development sessions; they do not invite users, publish reports, or modify clients/projects.
+Tests require all configuration instead of silently skipping. They use isolated browser contexts, one worker, no retries, and no saved login state, screenshots, videos, or traces. They exercise the custom password login, authenticated return to the sign-in page, stale callback recovery, logout and old-cookie replay, two tabs, and account isolation against real Cognito/BFF/frontend services. They create and revoke development sessions; they do not invite users, publish reports, or modify clients/projects.
 
 Run backend regressions on PRs and live browser tests after a development deployment. Keep browser artifacts private even though artifact directories are Git-ignored; any failure output containing browser URLs or request data must be treated as sensitive.
 
 ## Configure production smoke tests
 
-Deploy the callback fixes to the production AWS stack and the updated frontend to Netlify first. Use two dedicated production client test accounts with permanent passwords, different organizations with distinct display names, and at least one active building each. Do not use administrator accounts or real customer accounts.
+Deploy the callback fixes to the production AWS stack and the updated frontend to Netlify first. Use two dedicated production client test accounts with permanent passwords and different organizations with distinct display names. The primary organization must have at least one client-visible building. The secondary organization may be empty because the test verifies denial of access to the primary building; link a separate visible building later for a stronger positive fixture. Do not use administrator accounts or real customer accounts.
 
 If `.env.e2e.local` already exists, edit it instead of overwriting credentials you want to keep. Otherwise:
 

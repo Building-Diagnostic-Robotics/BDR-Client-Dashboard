@@ -228,10 +228,23 @@ describe("portal infrastructure", () => {
     expect(JSON.stringify(clientBffPolicy?.Properties?.PolicyDocument)).toContain(
       "dynamodb:ConditionCheckItem",
     );
+    const clientBffPolicyDocument = clientBffPolicy?.Properties?.PolicyDocument;
     const clientBffStatements = clientBffPolicy?.Properties?.PolicyDocument?.Statement as Array<{
       Action?: string | string[];
       Resource?: unknown;
+      Condition?: unknown;
     }>;
+    const listBucketStatements = clientBffStatements.filter((statement) => {
+      const actions = Array.isArray(statement.Action) ? statement.Action : [statement.Action];
+      return actions.includes("s3:ListBucket");
+    });
+    expect(listBucketStatements).toEqual([
+      expect.objectContaining({
+        Action: "s3:ListBucket",
+        Resource: "arn:aws:s3:::bdr-roofus-uploads",
+      }),
+    ]);
+    expect(listBucketStatements[0]).not.toHaveProperty("Condition");
     const clientUpdateResources = clientBffStatements
       .filter((statement) => {
         const actions = Array.isArray(statement.Action) ? statement.Action : [statement.Action];

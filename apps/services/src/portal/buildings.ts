@@ -65,7 +65,7 @@ async function writeJson(
 async function listChildren(prefix: string): Promise<string[]> {
   const response = await s3.send(new ListObjectsV2Command({
     Bucket: bucket(),
-    Prefix: prefix,
+    ...(prefix ? { Prefix: prefix } : {}),
     Delimiter: "/",
   }));
   return (response.CommonPrefixes ?? [])

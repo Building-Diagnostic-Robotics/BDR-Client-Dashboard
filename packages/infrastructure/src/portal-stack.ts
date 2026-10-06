@@ -511,9 +511,6 @@ export class PortalStack extends Stack {
       new iam.PolicyStatement({
         actions: ["s3:ListBucket"],
         resources: ["arn:aws:s3:::bdr-roofus-uploads"],
-        conditions: {
-          StringLike: { "s3:prefix": ["", "*/", "reportgen_portal/*"] },
-        },
       }),
     );
     artifactSigner.addToRolePolicy(
