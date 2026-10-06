@@ -7,7 +7,12 @@ import {
   clientProjectListResponseSchema,
   clientProjectSummarySchema,
   clientReportMetadataSchema,
+  passwordResetConfirmResponseSchema,
+  passwordResetConfirmSchema,
+  passwordResetRequestResponseSchema,
+  passwordResetRequestSchema,
 } from "./client";
+
 
 describe("client response contracts", () => {
   it("rejects internal organization and user identifiers", () => {
@@ -75,4 +80,38 @@ describe("client response contracts", () => {
     expect(clientProjectListResponseSchema.safeParse({ items: [summary] }).success).toBe(true);
     expect(clientProjectListResponseSchema.safeParse({ items: [project] }).success).toBe(false);
   });
+
+  it("validates password reset request contracts", () => {
+    expect(passwordResetRequestSchema.safeParse({ email: "user@example.com" }).success).toBe(true);
+    expect(passwordResetRequestSchema.safeParse({ email: "invalid-email" }).success).toBe(false);
+    expect(passwordResetRequestSchema.safeParse({ email: "user@example.com", extra: true }).success).toBe(false);
+    expect(passwordResetRequestResponseSchema.safeParse({ accepted: true }).success).toBe(true);
+    expect(passwordResetRequestResponseSchema.safeParse({ accepted: false }).success).toBe(false);
+  });
+
+  it("validates password reset confirm contracts", () => {
+    expect(passwordResetConfirmSchema.safeParse({
+      email: "user@example.com",
+      confirmationCode: "123456",
+      newPassword: "ValidPassword123!",
+    }).success).toBe(true);
+    expect(passwordResetConfirmSchema.safeParse({
+      email: "invalid-email",
+      confirmationCode: "123456",
+      newPassword: "ValidPassword123!",
+    }).success).toBe(false);
+    expect(passwordResetConfirmSchema.safeParse({
+      email: "user@example.com",
+      confirmationCode: "",
+      newPassword: "ValidPassword123!",
+    }).success).toBe(false);
+    expect(passwordResetConfirmSchema.safeParse({
+      email: "user@example.com",
+      confirmationCode: "123456",
+      newPassword: "",
+    }).success).toBe(false);
+    expect(passwordResetConfirmResponseSchema.safeParse({ reset: true }).success).toBe(true);
+    expect(passwordResetConfirmResponseSchema.safeParse({ reset: false }).success).toBe(false);
+  });
 });
+

@@ -47,8 +47,9 @@ test("a restored dashboard rechecks the session and hides content after logout",
   state.active = false;
   await restoreFromHistory(page);
   await expect(page).toHaveURL(/\/sign-in\?returnTo=%2Fprojects$/);
-  await expect(page.getByRole("heading", { name: "Sign in with your email and password", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sign In", exact: true })).toBeVisible();
   expect(state.sessionReads).toBe(initialReads + 1);
+
   await expect(page.getByRole("heading", { name: "Your projects" })).toHaveCount(0);
   await expect(page.getByText("First Test Organization")).toHaveCount(0);
 });

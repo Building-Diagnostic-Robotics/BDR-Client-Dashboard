@@ -322,4 +322,48 @@ describe("client BFF routes", () => {
       message: "Reload and review the latest version.",
     });
   });
+
+  it("rejects invalid email on password reset request", async () => {
+    const handler = createClientBffHandler({
+      portalOrigin: "https://portal.example.com",
+      service: service(),
+    });
+    const response = await handler(event("POST", "/bff/auth/password/reset/request", {
+      body: JSON.stringify({ email: "not-an-email" }),
+    }));
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body ?? "{}")).toEqual({
+      error: "invalid_request",
+      message: "A valid email is required",
+    });
+  });
+
+  it("returns accepted: true on password reset request without issuing session cookies", async () => {
+    const handler = createClientBffHandler({
+      portalOrigin: "https://portal.example.com",
+      service: service(),
+    });
+    const response = await handler(event("POST", "/bff/auth/password/reset/request", {
+      body: JSON.stringify({ email: "user@example.com" }),
+    }));
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body ?? "{}")).toEqual({ accepted: true });
+    expect(response.cookies).toBeUndefined();
+  });
+
+  it("rejects invalid payload on password reset confirm", async () => {
+    const handler = createClientBffHandler({
+      portalOrigin: "https://portal.example.com",
+      service: service(),
+    });
+    const response = await handler(event("POST", "/bff/auth/password/reset/confirm", {
+      body: JSON.stringify({ email: "user@example.com", confirmationCode: "", newPassword: "" }),
+    }));
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body ?? "{}")).toEqual({
+      error: "invalid_request",
+      message: "Invalid reset confirmation details",
+    });
+  });
 });
+
