@@ -23,7 +23,7 @@ export type PasswordLoginResult =
   | { kind: "mfa"; session: string }
   | { kind: "new-password"; session: string };
 
-type PasswordPoolConfig = Readonly<{
+export type PasswordPoolConfig = Readonly<{
   adminPoolId?: string;
   adminClientId?: string;
   clientPoolId?: string;
@@ -53,7 +53,7 @@ export async function resolvePasswordLoginPool(
   return null;
 }
 
-async function secretHash(username: string, clientId: string, secretArn: string): Promise<string> {
+export async function secretHash(username: string, clientId: string, secretArn: string): Promise<string> {
   if (!clientSecret) {
     const result = await secrets.send(new GetSecretValueCommand({ SecretId: secretArn }));
     if (!result.SecretString) throw new Error("Client secret is unavailable");
@@ -61,6 +61,7 @@ async function secretHash(username: string, clientId: string, secretArn: string)
   }
   return createHmac("sha256", clientSecret).update(`${username}${clientId}`).digest("base64");
 }
+
 
 function tokensFrom(result: {
   AccessToken?: string | undefined;

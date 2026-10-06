@@ -4,7 +4,12 @@ History of this repository from `git log` (newest first). Merge commits are omit
 
 ## Unreleased
 
+- Restore and redesign the unified `/sign-in` page with a clean, responsive 30rem split card (white logo header with cropped BDR logo and light-gray form section), streamlined "Sign In" header, rounded inputs, green focus indicators, and green gradient submit buttons.
+- Implement explicit screens for credentials, temporary-password replacement, authenticator code (MFA), forgot-password request, and code confirmation with live accessible password requirement validation (text and icons).
+- Add Cognito password recovery endpoints `POST /bff/auth/password/reset/request` and `POST /bff/auth/password/reset/confirm` in Client BFF with client secret hashing, account resolution, mapped public errors, and uniform non-disclosure responses.
+- Add shared Zod contracts in `@bdr/contracts` and unit and Playwright UI tests for password reset and authentication transitions.
 - Enforce one-email-one-Cognito-pool across client and administrator provisioning, resolve dashboard sign-ins client-first with administrator fallback, preflight client email replacements before revocation, and add a read-only cross-pool overlap audit.
+
 - Harden shared S3 JSON state reads so only missing objects produce empty initial state; malformed data, missing ETags, permission errors, throttling, network failures, and S3 server errors now fail closed instead of risking destructive overwrites.
 - Add optimistic concurrency control for dashboard writes to `org_links.json` and building `status.json` using S3 ETags, return HTTP 409 for stale writes, and reload current data before an administrator retries a conflicting change.
 - Tighten password-session token handling, align strict TypeScript contracts, update restored-session browser fixtures for the shared-building API, and preserve dashboard logo proportions.

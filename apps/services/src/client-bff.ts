@@ -1,5 +1,10 @@
 import { CognitoIdentityProviderClient } from "@aws-sdk/client-cognito-identity-provider";
-import { artifactAccessRequestSchema, reportTypeSchema } from "@bdr/contracts";
+import {
+  artifactAccessRequestSchema,
+  passwordResetConfirmSchema,
+  passwordResetRequestSchema,
+  reportTypeSchema,
+} from "@bdr/contracts";
 import { DomainError } from "@bdr/domain";
 import type {
   APIGatewayProxyEventV2,
@@ -10,6 +15,12 @@ import { ZodError } from "zod";
 import { AdminPoolOAuth } from "./auth/admin-oauth";
 import { cognitoUserExists } from "./auth/cognito-user-pools";
 import { passwordLogin } from "./auth/password-login";
+import {
+  confirmPasswordReset,
+  PasswordResetServiceError,
+  requestPasswordReset,
+} from "./auth/password-reset";
+
 import { CognitoClientOAuth, DynamoClientAuthStore, KmsTokenCipher, clientRuntimeConfig } from "./auth/aws-client";
 import { ClientAuthService, loginCookie, query } from "./auth/client";
 import {
@@ -203,6 +214,78 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
             message: error instanceof Error ? error.message : "unknown",
           }));
           return json(401, { error: "sign_in_failed" });
+        }
+      }
+
+      if (method === "POST" && path === "/bff/auth/password/reset/request") {
+        let body: unknown;
+        try {
+          body = JSON.parse(event.body ?? "{}");
+        } catch {
+          return json(400, { error: "invalid_request", message: "Invalid JSON body" });
+        }
+        const parsed = passwordResetRequestSchema.safeParse(body);
+        if (!parsed.success) {
+          return json(400, { error: "invalid_request", message: "A valid email is required" });
+        }
+        const adminPoolId = dependencies.adminIssuer?.split("/").pop();
+        try {
+          const result = await requestPasswordReset({
+            email: parsed.data.email,
+            ...(adminPoolId ? { adminPoolId } : {}),
+            ...(process.env.ADMIN_APP_CLIENT_ID ? { adminClientId: process.env.ADMIN_APP_CLIENT_ID } : {}),
+            ...(process.env.CLIENT_USER_POOL_ID ? { clientPoolId: process.env.CLIENT_USER_POOL_ID } : {}),
+            ...(process.env.CLIENT_APP_CLIENT_ID ? { clientClientId: process.env.CLIENT_APP_CLIENT_ID } : {}),
+            ...(process.env.CLIENT_APP_SECRET_ARN ? { clientSecretArn: process.env.CLIENT_APP_SECRET_ARN } : {}),
+          });
+          return json(200, result);
+        } catch (error) {
+          if (error instanceof PasswordResetServiceError) {
+            return json(error.statusCode, { error: error.code, message: error.message });
+          }
+          console.warn(JSON.stringify({
+            requestId: requestId(event),
+            error: "password_reset_request_failed",
+            message: error instanceof Error ? error.message : "unknown",
+          }));
+          return json(500, { error: "reset_failed", message: "Unable to request password reset. Please try again." });
+        }
+      }
+
+      if (method === "POST" && path === "/bff/auth/password/reset/confirm") {
+        let body: unknown;
+        try {
+          body = JSON.parse(event.body ?? "{}");
+        } catch {
+          return json(400, { error: "invalid_request", message: "Invalid JSON body" });
+        }
+        const parsed = passwordResetConfirmSchema.safeParse(body);
+        if (!parsed.success) {
+          return json(400, { error: "invalid_request", message: "Invalid reset confirmation details" });
+        }
+        const adminPoolId = dependencies.adminIssuer?.split("/").pop();
+        try {
+          const result = await confirmPasswordReset({
+            email: parsed.data.email,
+            confirmationCode: parsed.data.confirmationCode,
+            newPassword: parsed.data.newPassword,
+            ...(adminPoolId ? { adminPoolId } : {}),
+            ...(process.env.ADMIN_APP_CLIENT_ID ? { adminClientId: process.env.ADMIN_APP_CLIENT_ID } : {}),
+            ...(process.env.CLIENT_USER_POOL_ID ? { clientPoolId: process.env.CLIENT_USER_POOL_ID } : {}),
+            ...(process.env.CLIENT_APP_CLIENT_ID ? { clientClientId: process.env.CLIENT_APP_CLIENT_ID } : {}),
+            ...(process.env.CLIENT_APP_SECRET_ARN ? { clientSecretArn: process.env.CLIENT_APP_SECRET_ARN } : {}),
+          });
+          return json(200, result);
+        } catch (error) {
+          if (error instanceof PasswordResetServiceError) {
+            return json(error.statusCode, { error: error.code, message: error.message });
+          }
+          console.warn(JSON.stringify({
+            requestId: requestId(event),
+            error: "password_reset_confirm_failed",
+            message: error instanceof Error ? error.message : "unknown",
+          }));
+          return json(500, { error: "reset_failed", message: "Unable to reset password. Please try again." });
         }
       }
 

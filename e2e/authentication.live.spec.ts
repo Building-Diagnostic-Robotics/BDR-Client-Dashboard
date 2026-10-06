@@ -4,9 +4,10 @@ import { clientMeResponseSchema } from "@bdr/contracts";
 const portalOrigin = () => new URL(process.env.PORTAL_E2E_BASE_URL!).origin;
 const dashboardHeading = (page: Page) => page.getByRole("heading", { name: "Buildings", exact: true, level: 1 });
 const signInHeading = (page: Page) => page.getByRole("heading", {
-  name: "Sign in with your email and password",
+  name: "Sign In",
   exact: true,
 });
+
 
 async function signIn(page: Page, other = false) {
   await page.goto("/projects");

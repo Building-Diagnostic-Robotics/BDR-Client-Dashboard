@@ -82,6 +82,24 @@ export const clientLogoutResponseSchema = z.object({
   logoutUrl: z.url(),
 }).strict();
 
+export const passwordResetRequestSchema = z.object({
+  email: z.email(),
+}).strict();
+
+export const passwordResetRequestResponseSchema = z.object({
+  accepted: z.literal(true),
+}).strict();
+
+export const passwordResetConfirmSchema = z.object({
+  email: z.email(),
+  confirmationCode: z.string().trim().min(1).max(50),
+  newPassword: z.string().min(1).max(256),
+}).strict();
+
+export const passwordResetConfirmResponseSchema = z.object({
+  reset: z.literal(true),
+}).strict();
+
 export type ClientSessionResponse = z.infer<typeof clientSessionResponseSchema>;
 export type ClientMeResponse = z.infer<typeof clientMeResponseSchema>;
 export type ClientProjectInspectionSummary = z.infer<typeof clientProjectInspectionSummarySchema>;
@@ -97,3 +115,8 @@ export type ClientOrganizationDocumentMetadata = z.infer<
 >;
 export type ArtifactAccessResponse = z.infer<typeof artifactAccessResponseSchema>;
 export type ClientLogoutResponse = z.infer<typeof clientLogoutResponseSchema>;
+export type PasswordResetRequest = z.infer<typeof passwordResetRequestSchema>;
+export type PasswordResetRequestResponse = z.infer<typeof passwordResetRequestResponseSchema>;
+export type PasswordResetConfirm = z.infer<typeof passwordResetConfirmSchema>;
+export type PasswordResetConfirmResponse = z.infer<typeof passwordResetConfirmResponseSchema>;
+
