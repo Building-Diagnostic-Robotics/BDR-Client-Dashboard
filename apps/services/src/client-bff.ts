@@ -32,7 +32,7 @@ import {
 import { JSON_HEADERS, clearCookie, json, redirect, requestId, secureCookie } from "./shared/http";
 import { ClientResourceService } from "./client/resources";
 import { emailBlocked } from "./portal/email";
-import { allowedClientKey, clientCanSee, commitHowToRead, createClientAccount, createPortalAdmin, grantPortalAdmin, howToReadFor, howToReadUpload, linkClient, listClientUsers, listLinkedClients, listPortalBuildings, listUnlinkedFolders, loadPortalStatus, loadPortalStatusVersion, ownsPrefix, PORTAL_ADMIN_ORGANIZATION_ID, renameClient, replaceClientEmail, reportFileMatches, resendClientInvite, revokeClientUser, savePortalStatus, signedRead, signedUpload } from "./portal/buildings";
+import { allowedClientKey, clientCanSee, commitHowToRead, createClientAccount, createPortalAdmin, currentHowToReadForOrg, grantPortalAdmin, howToReadFor, howToReadUpload, linkClient, listClientUsers, listLinkedClients, listPortalBuildings, listUnlinkedFolders, loadPortalStatus, loadPortalStatusVersion, ownsPrefix, PORTAL_ADMIN_ORGANIZATION_ID, renameClient, replaceClientEmail, reportFileMatches, resendClientInvite, revokeClientUser, savePortalStatus, signedRead, signedReadWithDisposition, signedUpload } from "./portal/buildings";
 
 const cognito = new CognitoIdentityProviderClient({});
 const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60;
@@ -446,6 +446,18 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
         const organizationId = context.organization.organizationId;
         if (method === "GET" && path === "/bff/portal/buildings") {
           return json(200, { items: await listPortalBuildings(organizationId, admin), admin });
+        }
+        if (method === "GET" && path === "/bff/portal/how-to-read/current") {
+          const guide = await currentHowToReadForOrg(organizationId);
+          if (!guide) return json(404, { error: "not_found" });
+          return json(200, { updatedAt: guide.updatedAt });
+        }
+        if (method === "POST" && path === "/bff/portal/how-to-read/current/access") {
+          assertMutationRequest(event, dependencies.portalOrigin, active.session.csrfTokenHash);
+          const disposition = artifactAccessRequestSchema.parse(JSON.parse(event.body ?? "{}")).disposition;
+          const guide = await currentHowToReadForOrg(organizationId);
+          if (!guide) return json(404, { error: "not_found" });
+          return json(200, await signedReadWithDisposition(guide.key, disposition));
         }
         if (method === "GET" && path === "/bff/portal/clients") {
           if (!admin) return json(403, { error: "forbidden" });

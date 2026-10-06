@@ -6,6 +6,7 @@ import {
   createClientAccount,
   createPortalAdmin,
   replaceClientEmail,
+  summary,
 } from "./buildings";
 
 afterEach(() => {
@@ -95,3 +96,58 @@ describe("cross-pool email uniqueness", () => {
     });
   });
 });
+
+describe("shared building summary and latest report update", () => {
+  it("calculates latestReportUpdate using newest timestamp among client-visible reports", () => {
+    const res = summary("client/robot/2026-09-17/building/", {
+      displayName: "Main Tower",
+      reports: {
+        ASSESSMENT: {
+          clientVisible: true,
+          generatedAt: "2026-09-10T10:00:00.000Z",
+        },
+        EVIDENCE: {
+          clientVisible: true,
+          generatedAt: "2026-09-15T12:00:00.000Z",
+        },
+        ROOF_TAKEOFF: {
+          clientVisible: false,
+          generatedAt: "2026-09-20T16:00:00.000Z",
+        },
+      },
+    });
+
+    expect(res.latestReportUpdate).toBe("2026-09-15T12:00:00.000Z");
+    expect(res.readyReports).toEqual(["ASSESSMENT", "EVIDENCE"]);
+  });
+
+  it("returns null for latestReportUpdate when no reports are client-visible", () => {
+    const res = summary("client/robot/2026-09-17/building/", {
+      displayName: "Main Tower",
+      reports: {
+        ASSESSMENT: {
+          clientVisible: false,
+          generatedAt: "2026-09-10T10:00:00.000Z",
+        },
+      },
+    });
+
+    expect(res.latestReportUpdate).toBeNull();
+    expect(res.readyReports).toEqual([]);
+  });
+
+  it("returns null for latestReportUpdate when client-visible reports have no timestamp", () => {
+    const res = summary("client/robot/2026-09-17/building/", {
+      displayName: "Main Tower",
+      reports: {
+        ASSESSMENT: {
+          clientVisible: true,
+        },
+      },
+    });
+
+    expect(res.latestReportUpdate).toBeNull();
+    expect(res.readyReports).toEqual(["ASSESSMENT"]);
+  });
+});
+

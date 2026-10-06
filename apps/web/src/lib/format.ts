@@ -42,3 +42,41 @@ export function formatReportUpdatedDate(value: string, timeZone?: string, now = 
   return `Updated ${formatShortDate(value, timeZone)}`;
 }
 
+export function formatBuildingScanDate(value: string | null, timeZone?: string | null): string {
+  if (!value) return "No scans yet";
+  try {
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return "No scans yet";
+    return formatShortDate(value, timeZone || undefined);
+  } catch {
+    return "No scans yet";
+  }
+}
+
+export function formatBuildingReportsStatus(
+  readyReports: string[],
+  latestReportUpdate: string | null,
+  timeZone?: string | null,
+  now = Date.now(),
+): { text: string; isNone: boolean } {
+  if (readyReports.length === 0) {
+    return { text: "No reports yet", isNone: true };
+  }
+  if (!latestReportUpdate) {
+    return { text: "Available", isNone: false };
+  }
+  try {
+    const d = new Date(latestReportUpdate);
+    if (Number.isNaN(d.getTime())) {
+      return { text: "Available", isNone: false };
+    }
+    return {
+      text: formatReportUpdatedDate(latestReportUpdate, timeZone || undefined, now),
+      isNone: false,
+    };
+  } catch {
+    return { text: "Available", isNone: false };
+  }
+}
+
+

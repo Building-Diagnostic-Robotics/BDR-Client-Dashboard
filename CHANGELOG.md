@@ -4,6 +4,13 @@ History of this repository from `git log` (newest first). Merge commits are omit
 
 ## Unreleased
 
+- Restore the client landing page on `/projects`: branch client view from administrator view using the authenticated `admin` flag. Clients receive "Your projects", an organization description, a single building/address search bar, a 2-column grid, restored building cards linking to `/buildings/view?prefix=...`, and the shared How to Read guide banner beneath the grid.
+- Formalize design tokens in `apps/web/src/app/tokens.css` (spacing scale, typography scale, border radii, borders, and semantic colors) and import at the top of `globals.css`.
+- Standardize page templates and reusable UI primitives in `apps/web/src/components/` (`PageHeader`, `SectionHeader`, `SearchBar`, `EmptyState`, `ContentState`, `BuildingCard`, `HowToReadBanner`, `CountBadge`) to prevent unbounded growth of `globals.css`.
+- Extend shared-building summaries with `latestReportUpdate` derived from the newest timestamp among client-visible reports, displaying relative formats under 24 hours, short dates after 24 hours, "Available" for un-timestamped reports, and "No reports yet" for none.
+- Add session-secured How to Read PDF endpoints in Client BFF (`GET /bff/portal/how-to-read/current` and `POST /bff/portal/how-to-read/current/access`), ensuring organization resolution is strictly server-derived and never accepting client prefixes or S3 keys from the browser.
+- Update live authentication test expectations for "Your projects", and add Playwright UI and backend vitest test suites covering landing page search, fallbacks, guide access, and administrator preservation.
+
 - Restore and redesign the unified `/sign-in` page with a clean, responsive 30rem split card (white logo header with cropped BDR logo and light-gray form section), streamlined "Sign In" header, rounded inputs, green focus indicators, and green gradient submit buttons.
 - Implement explicit screens for credentials, temporary-password replacement, authenticator code (MFA), forgot-password request, and code confirmation with live accessible password requirement validation (text and icons).
 - Add Cognito password recovery endpoints `POST /bff/auth/password/reset/request` and `POST /bff/auth/password/reset/confirm` in Client BFF with client secret hashing, account resolution, mapped public errors, and uniform non-disclosure responses.

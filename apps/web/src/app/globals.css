@@ -1,3 +1,5 @@
+@import "./tokens.css";
+
 :root {
   --green-700: #15803d;
   --green-600: #16a34a;
@@ -322,6 +324,23 @@ h3 {
   border-radius: 0.75rem;
   background: var(--white);
   box-shadow: var(--shadow-sm);
+}
+
+.guide-banner--error {
+  border-color: var(--color-danger-border);
+  background: var(--color-danger-bg);
+  color: var(--color-danger-text);
+  padding: 0.95rem 1.25rem;
+  margin-top: 3rem;
+  border-radius: var(--radius-lg);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.guide-banner--error p {
+  margin: 0;
+  font-size: var(--font-size-base);
 }
 
 .guide-banner__main {
