@@ -4,7 +4,10 @@ History of this repository from `git log` (newest first). Merge commits are omit
 
 ## Unreleased
 
-- Replace the client building detail page with a physical-building inspection catalog: the latest inspection opens by default, previous inspections remain collapsed, and every inspection shows Roof Assessment, Inspection Evidence, Roof Takeoff, As-built, and Capital Planning with Available, In preparation, or Not included states.
+- Restore the full operational administrator building page with report approval, stale toggling, PDF viewing, history visibility controls, scan section marks, building details, capital planning, visit status, and moisture map navigation, while embedding the new physical scan attachment and client report classifications card directly into the admin view.
+- Enable administrator building prefix resolution via `GET /bff/portal/building-id` and link administrator project cards with prefix, building identity, and client context, preserving the dedicated client catalog experience for customer sessions.
+- Harden the live authentication E2E test suite by eliminating navigation interruption races during history restoration across Chromium and WebKit, and add support for single-account live verification with graceful skips when secondary accounts or tenant buildings are absent.
+- Fix TypeScript strict-mode compiler errors in `@bdr/services` by properly importing `DynamoDBDocumentClient` and explicitly typing unprocessed DynamoDB batch keys.
 - Restore secure per-report View, Download, and Download all actions while resolving every S3 object server-side; add editable building identity metadata, explicit administrator scan attachment across every prefix linked to the organization, report classification, and private-draft-then-publish As-built workflows.
 - Introduce opaque physical building and inspection identities with conditional DynamoDB writes, exclusive source claims, and atomic audit records; derive provisional identities for existing data, reject partial scan sections, preserve legacy client bookmarks through an authorized redirect, and close the retired raw status/action routes to client sessions.
 - Normalize legacy timezone-less scan timestamps at the backend boundary so physical-building responses satisfy the shared absolute-time contract and render consistently across client time zones.
