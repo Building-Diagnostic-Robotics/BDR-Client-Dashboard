@@ -478,12 +478,14 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
           return json(200, await getPortalCatalogBuilding(targetOrganizationId, buildingId, admin));
         }
         if (method === "GET" && path === "/bff/portal/building-id") {
-          if (admin) return json(403, { error: "forbidden" });
           const prefix = query(event, "prefix") ?? "";
-          if (!(await ownsPrefix(organizationId, false, prefix))) return json(404, { error: "not_found" });
-          const status = await loadPortalStatus(prefix);
-          if (!clientCanSee(status, organizationId, false)) return json(404, { error: "not_found" });
-          return json(200, { buildingId: await portalBuildingIdForSource(organizationId, prefix) });
+          const targetOrganizationId = await targetPortalOrganization(query(event, "client"));
+          if (!(await ownsPrefix(targetOrganizationId, admin, prefix))) return json(404, { error: "not_found" });
+          if (!admin) {
+            const status = await loadPortalStatus(prefix);
+            if (!clientCanSee(status, targetOrganizationId, false)) return json(404, { error: "not_found" });
+          }
+          return json(200, { buildingId: await portalBuildingIdForSource(targetOrganizationId, prefix) });
         }
         if (method === "POST" && path === "/bff/portal/building-details") {
           assertMutationRequest(event, dependencies.portalOrigin, active.session.csrfTokenHash);

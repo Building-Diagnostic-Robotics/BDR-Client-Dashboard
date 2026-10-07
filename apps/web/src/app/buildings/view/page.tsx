@@ -1,13 +1,14 @@
 "use client";
 
-import { portalBuildingIdResponseSchema } from "@bdr/contracts";
+import type { PortalBuildingDetail } from "@bdr/contracts";
+import { portalBuildingDetailSchema, portalBuildingIdResponseSchema } from "@bdr/contracts";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 
 import { usePortal } from "../../../components/portal-shell";
 import { ClientApiError, getClient, postClient } from "../../../lib/client-api";
-import { CatalogBuildingView } from "./catalog-building-view";
+import { AdminControls, CatalogBuildingView } from "./catalog-building-view";
 
 type Status = Record<string, unknown>;
 
@@ -50,8 +51,10 @@ function LegacyBuildingView() {
   const params = useSearchParams();
   const prefix = params.get("prefix") || "";
   const [status, setStatus] = useState<Status | null>(null);
+  const [catalogBuilding, setCatalogBuilding] = useState<PortalBuildingDetail | null>(null);
   const admin = Boolean(portalAdmin) || Boolean(status?.admin);
   const [error, setError] = useState<string | null>(null);
+  const clientPrefix = params.get("client") || prefix.replace(/^\/+|\/+$/g, "").split("/")[0] || "";
 
   useEffect(() => {
     if (!prefix) return;
@@ -59,6 +62,37 @@ function LegacyBuildingView() {
       .then(setStatus)
       .catch(() => setError("This building is unavailable."));
   }, [prefix]);
+
+  useEffect(() => {
+    let active = true;
+    if (!admin || !prefix) return;
+
+    async function loadCatalog() {
+      try {
+        let buildingId = params.get("buildingId");
+        if (!buildingId) {
+          const idRes = await getClient(
+            `/bff/portal/building-id?prefix=${encodeURIComponent(prefix)}&client=${encodeURIComponent(clientPrefix)}`,
+            portalBuildingIdResponseSchema,
+          );
+          buildingId = idRes.buildingId;
+        }
+        if (!active || !buildingId) return;
+        const detail = await getClient(
+          `/bff/portal/building-detail?buildingId=${encodeURIComponent(buildingId)}&client=${encodeURIComponent(clientPrefix)}`,
+          portalBuildingDetailSchema,
+        );
+        if (active) setCatalogBuilding(detail);
+      } catch {
+        // Operational tools remain available if catalog detail is unavailable
+      }
+    }
+
+    void loadCatalog();
+    return () => {
+      active = false;
+    };
+  }, [admin, prefix, clientPrefix, params]);
 
   async function approve(reportType: string) {
     await mutateBuilding(
@@ -205,6 +239,16 @@ function LegacyBuildingView() {
           </div>
         )}
       </section>
+      {admin && catalogBuilding ? (
+        <AdminControls
+          building={catalogBuilding}
+          clientPrefix={clientPrefix}
+          onChanged={(next) => {
+            setCatalogBuilding(next);
+            void reload();
+          }}
+        />
+      ) : null}
       {status ? <section className="report-panel" aria-labelledby="history-title">
         <h2 id="history-title">History</h2>
         {admin ? (
@@ -488,12 +532,19 @@ function LegacyClientRedirect({ prefix }: { prefix: string }) {
 function BuildingView() {
   const { admin } = usePortal();
   const params = useSearchParams();
+  const prefix = params.get("prefix") ?? "";
   const buildingId = params.get("buildingId");
+
+  if (admin && prefix) {
+    return <LegacyBuildingView />;
+  }
   if (buildingId) {
     return <CatalogBuildingView buildingId={buildingId} clientPrefix={params.get("client") ?? undefined} />;
   }
-  const prefix = params.get("prefix") ?? "";
-  return admin ? <LegacyBuildingView /> : <LegacyClientRedirect prefix={prefix} />;
+  if (admin) {
+    return <LegacyBuildingView />;
+  }
+  return <LegacyClientRedirect prefix={prefix} />;
 }
 
 export default function BuildingViewPage() {

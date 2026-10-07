@@ -268,7 +268,7 @@ function EditDetails({
   );
 }
 
-function AdminControls({
+export function AdminControls({
   building,
   clientPrefix,
   onChanged,
