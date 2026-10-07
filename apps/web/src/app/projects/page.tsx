@@ -1,5 +1,6 @@
 "use client";
 
+import { portalBuildingListResponseSchema } from "@bdr/contracts";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
@@ -22,30 +23,36 @@ import {
 
 type Building = {
   buildingPrefix: string;
+  buildingId: string;
   displayName: string;
   address: string;
+  engineerNames: string;
   scanTime: string | null;
   uploadTime: string | null;
   timeZone: string | null;
   readyReports: string[];
   latestReportUpdate: string | null;
+  inspectionCount: number;
 };
 
 const asBuildings = {
   parse(value: unknown): { items: Building[]; admin: boolean } {
-    const row = value as { items?: Building[]; admin?: boolean };
+    const row = portalBuildingListResponseSchema.parse(value);
     return {
-      items: (row.items ?? []).map((item) => ({
-        buildingPrefix: String(item.buildingPrefix || ""),
-        displayName: String(item.displayName || ""),
-        address: String(item.address || ""),
-        scanTime: item.scanTime ? String(item.scanTime) : null,
-        uploadTime: item.uploadTime ? String(item.uploadTime) : null,
-        timeZone: item.timeZone ? String(item.timeZone) : null,
-        readyReports: Array.isArray(item.readyReports) ? item.readyReports.map(String) : [],
-        latestReportUpdate: item.latestReportUpdate ? String(item.latestReportUpdate) : null,
+      items: row.items.map((item) => ({
+        buildingPrefix: "buildingPrefix" in item ? item.buildingPrefix : "",
+        buildingId: item.buildingId,
+        displayName: item.displayName,
+        address: item.address,
+        engineerNames: item.engineerNames,
+        scanTime: item.latestInspection?.scannedAt ?? null,
+        uploadTime: item.latestInspection?.uploadCompletedAt ?? null,
+        timeZone: item.latestInspection?.timeZone ?? null,
+        readyReports: item.latestInspection?.availableReportTypes ?? [],
+        latestReportUpdate: item.latestInspection?.latestReportUpdate ?? null,
+        inspectionCount: item.inspectionCount,
       })),
-      admin: Boolean(row.admin),
+      admin: row.admin,
     };
   },
 };
@@ -224,8 +231,10 @@ function ProjectsPageContent() {
                   );
                   return (
                     <BuildingCard
-                      key={project.buildingPrefix}
-                      href={`/buildings/view?prefix=${encodeURIComponent(project.buildingPrefix)}`}
+                      key={project.buildingId || project.buildingPrefix}
+                      href={project.buildingId
+                        ? `/buildings/view?buildingId=${encodeURIComponent(project.buildingId)}`
+                        : `/buildings/view?prefix=${encodeURIComponent(project.buildingPrefix)}`}
                       displayName={project.displayName}
                       address={project.address}
                       scanDateText={scanDateText}
@@ -449,7 +458,9 @@ function ProjectsPageContent() {
                 {filteredProjects.map((project) => (
                   <Link
                     className="project-card"
-                    href={`/buildings/view?prefix=${encodeURIComponent(project.buildingPrefix)}`}
+                    href={project.buildingId
+                      ? `/buildings/view?buildingId=${encodeURIComponent(project.buildingId)}&client=${encodeURIComponent(clientName(project.buildingPrefix))}`
+                      : `/buildings/view?prefix=${encodeURIComponent(project.buildingPrefix)}`}
                     key={project.buildingPrefix}
                   >
                     <div className="project-card__body">

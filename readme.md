@@ -1,6 +1,6 @@
 # BDR Inspections Dashboard
 
-BDR Inspections Dashboard is the secure client portal for Building Diagnostic Robotics. Clients can view their buildings, published inspection history, the organization-level How to Read guide, and current report PDFs.
+BDR Inspections Dashboard is the secure client portal for Building Diagnostic Robotics. Clients can view physical buildings, latest and previous inspections, available report artifacts, and the organization-level How to Read guide.
 
 V1 registry publication remains available through the TOTP-protected `portal-admin` CLI. Buildings released from ReportGen are a separate shared-file path on `bdr-roofus-uploads`. History: [CHANGELOG.md](./CHANGELOG.md).
 

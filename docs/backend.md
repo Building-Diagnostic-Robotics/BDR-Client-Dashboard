@@ -25,7 +25,7 @@ The Client BFF serves two stores. Both require a live dashboard session. A calle
 
 **Published inspection registry.** DynamoDB holds organizations, projects, inspections, report classifications, and current version pointers. PDFs live in the private published bucket. `src/client/resources.ts` applies the client visibility rules: the organization, project, and inspection must be active, the inspection must be published, and the report must be a verified current version. Collection routes and direct report access use the same rules. Missing and invisible resources both return `404`.
 
-**Shared building portal.** Building status is JSON in the data bucket named by `DATA_BUCKET_NAME` (the stack sets this to `bdr-roofus-uploads`). `src/portal/buildings.ts` reads and writes that status, links client folders to organizations in `reportgen_portal/org_links.json`, and manages Cognito users for those clients. The current dashboard pages use this path. Portal administrators are users whose token issuer is the Portal Admin Cognito pool and whose organization is recorded as a portal admin.
+**Shared building portal.** Report status and source metadata remain in the data bucket named by `DATA_BUCKET_NAME` (the stack sets this to `bdr-roofus-uploads`). `src/portal/buildings.ts` discovers those sources and manages organization links and Cognito users. `src/portal/catalog.ts` adds the client-facing physical-building model in the tenant DynamoDB table: one building can own multiple inspections, and a source can be claimed by only one building. Existing visible sources receive deterministic provisional building and inspection IDs until the first catalog mutation materializes them. Portal administrators are users whose token issuer is the Portal Admin Cognito pool and whose organization is recorded as a portal admin.
 
 Registry publication through the CLI is unchanged. The building portal does not write the published-report registry.
 
@@ -56,15 +56,22 @@ These routes live on the Client BFF. Reads return `404` when the session’s org
 
 | Route | Who | Purpose |
 | --- | --- | --- |
-| `GET /bff/portal/buildings` | Client or admin | Lean summaries for buildings visible to the caller. The collection read uses status metadata and an identity fallback from `general_data.json`; full report history, as-built discovery, and other detail enrichment remain on the single-building route. Each item includes `awaitingReports`, the report types still waiting for administrator approval. |
-| `GET /bff/portal/building` | Client or admin | One building’s status. Buildings marked `no_report` or `test_scan` are not shown to clients as approved reports. When history is hidden for the building, clients still receive the history list as empty. Clients do not receive `historyHidden`, `historyHideReason`, or `hiddenHistoryKeys`. Administrators receive those fields and every history row, with `hiddenFromClients` on a version that clients cannot see. |
-| `GET /bff/portal/file` | Client or admin | Short-lived read URL for an allowed key under a building the caller owns. Clients cannot open a history-only file while history is hidden, or a single version hidden from clients. The current approved file stays openable. |
-| `POST /bff/portal/building` | Client or admin | Building actions. Approval, history hide/restore, stale, and building marks require an administrator. Clients may edit identity and capital-plan inputs on a visible report, which marks that report stale. |
+| `GET /bff/portal/buildings` | Client or admin | Physical-building summaries for the caller. Client ownership is session-derived. Administrator rows retain the source prefix needed to select the target organization and scan source. |
+| `GET /bff/portal/building-detail` | Client or admin | One authorized physical building with ordered inspections and exactly five report rows per inspection. |
+| `GET /bff/portal/building-id` | Client | Resolves an authorized legacy source-prefix bookmark to its opaque physical building ID. |
+| `POST /bff/portal/building-details` | Client or admin | Update name, address, and comma-separated engineer names using the current revision. This metadata change does not stale reports. |
+| `GET /bff/portal/inspection-candidates` | Admin | Discover source uploads for a linked client. Completed sections are eligible; partial or interrupted sections cannot be attached. |
+| `POST /bff/portal/inspection-attach` | Admin | Atomically claim a source, attach the chosen completed sections as one inspection, update the building revision, and write an audit event. |
+| `POST /bff/portal/inspection-status` | Admin | Classify unavailable report rows as In preparation or Not included with optimistic concurrency. Available artifacts remain derived from approved source state. |
+| `POST /bff/portal/as-built-upload`, `POST /bff/portal/as-built-publish` | Admin | Upload a private PDF/PNG/JPEG draft, then explicitly publish the verified object to the selected inspection. |
+| `POST /bff/portal/artifact-access` | Client or admin | Resolve an available artifact from opaque building, inspection, and report type values, then return a short-lived View or Download URL. Raw S3 keys are not accepted. |
+| `GET /bff/portal/file` | Admin | Legacy short-lived read URL for an allowed raw key under an owned source prefix. Client report access uses opaque IDs through `/bff/portal/artifact-access`. |
+| `GET`, `POST /bff/portal/building` | Admin | Legacy raw building-status and operational actions. Client sessions are rejected; client pages use the physical-building routes above. |
 | `POST /bff/portal/admins` | Admin | Body `{ "email" }`. Creates the person in the admin pool when needed, adds them to `bdr-admins`, and Cognito emails a temporary password. |
 | `GET /bff/portal/clients` and the `client-*` routes | Admin | Link a folder, rename a client, invite, list, revoke, resend, or replace a user. |
 | `GET` and `POST /bff/portal/how-to-read` | Admin | Read or replace the organization How to Read file stored for a client prefix. |
 
-`POST /bff/portal/building` accepts an `action` field. Administrator actions include `approve`, `notes`, `hide-history`, `restore-history`, `hide-history-item`, `restore-history-item`, `building-mark`, `mark-stale`, `undo-stale`, and `reject-asbuilt`. `hide-history` requires `reason`. `hide-history-item` and `restore-history-item` require `key`, the stored PDF key. Hiding keeps the file in storage. Shared actions include `section-mark`, `capital-plan`, `identity`, `asbuilt-upload`, `takeoff-building`, and `edit-visible`. Unknown actions return `400`. `notes` records `pendingAdminEmail` and does not publish or hide a file. `markStale` on that action also marks the current report stale and removes it from the client’s current file.
+Catalog mutations use a revision condition and write the tenant record and audit event in one DynamoDB transaction. Source claims use conditional puts so one uploaded source cannot be attached to two physical buildings. A stale revision or competing source claim returns `409`; callers must reload before retrying.
 
 Outbound portal email is not sent. `src/portal/email.ts` records the SES identity blocker, and notices stay on `pendingAdminEmail` in the building status until a sending domain is verified.
 

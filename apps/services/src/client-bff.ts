@@ -1,11 +1,18 @@
 import { CognitoIdentityProviderClient } from "@aws-sdk/client-cognito-identity-provider";
 import {
   artifactAccessRequestSchema,
+  attachPortalInspectionRequestSchema,
+  opaqueIdSchema,
   passwordResetConfirmSchema,
   passwordResetRequestSchema,
+  portalAsBuiltUploadRequestSchema,
+  portalReportTypeSchema,
+  publishPortalAsBuiltRequestSchema,
   reportTypeSchema,
+  updatePortalBuildingRequestSchema,
+  updatePortalInspectionRequestSchema,
 } from "@bdr/contracts";
-import { DomainError } from "@bdr/domain";
+import { DomainError, notFound } from "@bdr/domain";
 import type {
   APIGatewayProxyEventV2,
   APIGatewayProxyStructuredResultV2,
@@ -32,7 +39,8 @@ import {
 import { JSON_HEADERS, clearCookie, json, redirect, requestId, secureCookie } from "./shared/http";
 import { ClientResourceService } from "./client/resources";
 import { emailBlocked } from "./portal/email";
-import { allowedClientKey, clientCanSee, commitHowToRead, createClientAccount, createPortalAdmin, currentHowToReadForOrg, grantPortalAdmin, howToReadFor, howToReadUpload, linkClient, listClientUsers, listLinkedClients, listPortalBuildings, listUnlinkedFolders, loadPortalStatus, loadPortalStatusVersion, ownsPrefix, PORTAL_ADMIN_ORGANIZATION_ID, renameClient, replaceClientEmail, reportFileMatches, resendClientInvite, revokeClientUser, savePortalStatus, signedRead, signedReadWithDisposition, signedUpload } from "./portal/buildings";
+import { allowedClientKey, clientCanSee, commitHowToRead, createClientAccount, createPortalAdmin, currentHowToReadForOrg, grantPortalAdmin, howToReadFor, howToReadUpload, linkClient, listClientUsers, listLinkedClients, listPortalBuildings, listUnlinkedFolders, loadPortalStatus, loadPortalStatusVersion, organizationForClientPrefix, ownsPrefix, PORTAL_ADMIN_ORGANIZATION_ID, renameClient, replaceClientEmail, reportFileMatches, resendClientInvite, revokeClientUser, savePortalStatus, signedArtifactRead, signedRead, signedReadWithDisposition, signedUpload } from "./portal/buildings";
+import { attachPortalInspection, getPortalCatalogBuilding, listPortalAdminCatalogBuildings, listPortalCatalogBuildings, listPortalInspectionCandidates, portalBuildingIdForSource, publishPortalAsBuilt, resolvePortalArtifact, startPortalAsBuiltUpload, updatePortalCatalogBuilding, updatePortalInspectionStatuses } from "./portal/catalog";
 
 const cognito = new CognitoIdentityProviderClient({});
 const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60;
@@ -444,8 +452,155 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
           return json(200, await dependencies.resources.reportAccess(context, decodeURIComponent(matched[1]!), decodeURIComponent(matched[2]!), reportTypeSchema.parse(decodeURIComponent(matched[3]!)), disposition, requestId(event)));
         }
         const organizationId = context.organization.organizationId;
+        const portalMutationContext = (action: string) => ({
+          actorId: context.userId,
+          actorSub: context.sub,
+          requestId: requestId(event),
+          action,
+        });
+        const targetPortalOrganization = async (clientPrefix: unknown): Promise<string> => {
+          if (!admin) return organizationId;
+          const linked = await organizationForClientPrefix(String(clientPrefix ?? ""));
+          if (!linked) notFound();
+          return linked.organizationId;
+        };
         if (method === "GET" && path === "/bff/portal/buildings") {
-          return json(200, { items: await listPortalBuildings(organizationId, admin), admin });
+          return json(200, {
+            items: admin
+              ? await listPortalAdminCatalogBuildings()
+              : await listPortalCatalogBuildings(organizationId),
+            admin,
+          });
+        }
+        if (method === "GET" && path === "/bff/portal/building-detail") {
+          const buildingId = opaqueIdSchema.parse(query(event, "buildingId"));
+          const targetOrganizationId = await targetPortalOrganization(query(event, "client"));
+          return json(200, await getPortalCatalogBuilding(targetOrganizationId, buildingId, admin));
+        }
+        if (method === "GET" && path === "/bff/portal/building-id") {
+          if (admin) return json(403, { error: "forbidden" });
+          const prefix = query(event, "prefix") ?? "";
+          if (!(await ownsPrefix(organizationId, false, prefix))) return json(404, { error: "not_found" });
+          const status = await loadPortalStatus(prefix);
+          if (!clientCanSee(status, organizationId, false)) return json(404, { error: "not_found" });
+          return json(200, { buildingId: await portalBuildingIdForSource(organizationId, prefix) });
+        }
+        if (method === "POST" && path === "/bff/portal/building-details") {
+          assertMutationRequest(event, dependencies.portalOrigin, active.session.csrfTokenHash);
+          const body = JSON.parse(event.body ?? "{}") as Record<string, unknown>;
+          const input = updatePortalBuildingRequestSchema.parse({
+            displayName: body.displayName,
+            address: body.address,
+            engineerNames: body.engineerNames,
+            expectedRevision: body.expectedRevision,
+          });
+          const targetOrganizationId = await targetPortalOrganization(body.clientPrefix);
+          return json(200, await updatePortalCatalogBuilding(
+            targetOrganizationId,
+            opaqueIdSchema.parse(body.buildingId),
+            input,
+            portalMutationContext("PORTAL_BUILDING_DETAILS_UPDATED"),
+            admin,
+          ));
+        }
+        if (method === "GET" && path === "/bff/portal/inspection-candidates") {
+          if (!admin) return json(403, { error: "forbidden" });
+          const clientPrefix = query(event, "client") ?? "";
+          const buildingId = opaqueIdSchema.parse(query(event, "buildingId"));
+          const targetOrganizationId = await targetPortalOrganization(clientPrefix);
+          return json(200, { items: await listPortalInspectionCandidates(targetOrganizationId, clientPrefix, buildingId) });
+        }
+        if (method === "POST" && path === "/bff/portal/inspection-attach") {
+          assertMutationRequest(event, dependencies.portalOrigin, active.session.csrfTokenHash);
+          if (!admin) return json(403, { error: "forbidden" });
+          const body = JSON.parse(event.body ?? "{}") as Record<string, unknown>;
+          const input = attachPortalInspectionRequestSchema.parse({
+            sourceId: body.sourceId,
+            includedSectionIds: body.includedSectionIds,
+            expectedRevision: body.expectedRevision,
+          });
+          const targetOrganizationId = await targetPortalOrganization(body.clientPrefix);
+          return json(200, await attachPortalInspection(
+            targetOrganizationId,
+            opaqueIdSchema.parse(body.buildingId),
+            input,
+            portalMutationContext("PORTAL_INSPECTION_ATTACHED"),
+          ));
+        }
+        if (method === "POST" && path === "/bff/portal/inspection-status") {
+          assertMutationRequest(event, dependencies.portalOrigin, active.session.csrfTokenHash);
+          if (!admin) return json(403, { error: "forbidden" });
+          const body = JSON.parse(event.body ?? "{}") as Record<string, unknown>;
+          const input = updatePortalInspectionRequestSchema.parse({
+            reportStatuses: body.reportStatuses,
+            expectedRevision: body.expectedRevision,
+          });
+          const targetOrganizationId = await targetPortalOrganization(body.clientPrefix);
+          return json(200, await updatePortalInspectionStatuses(
+            targetOrganizationId,
+            opaqueIdSchema.parse(body.buildingId),
+            opaqueIdSchema.parse(body.inspectionId),
+            input.reportStatuses,
+            input.expectedRevision,
+            portalMutationContext("PORTAL_REPORT_CLASSIFICATIONS_UPDATED"),
+          ));
+        }
+        if (method === "POST" && path === "/bff/portal/as-built-upload") {
+          assertMutationRequest(event, dependencies.portalOrigin, active.session.csrfTokenHash);
+          if (!admin) return json(403, { error: "forbidden" });
+          const body = JSON.parse(event.body ?? "{}") as Record<string, unknown>;
+          const input = portalAsBuiltUploadRequestSchema.parse({
+            filename: body.filename,
+            contentType: body.contentType,
+            sizeBytes: body.sizeBytes,
+          });
+          const targetOrganizationId = await targetPortalOrganization(body.clientPrefix);
+          return json(200, await startPortalAsBuiltUpload(
+            targetOrganizationId,
+            opaqueIdSchema.parse(body.buildingId),
+            opaqueIdSchema.parse(body.inspectionId),
+            input,
+          ));
+        }
+        if (method === "POST" && path === "/bff/portal/as-built-publish") {
+          assertMutationRequest(event, dependencies.portalOrigin, active.session.csrfTokenHash);
+          if (!admin) return json(403, { error: "forbidden" });
+          const body = JSON.parse(event.body ?? "{}") as Record<string, unknown>;
+          const input = publishPortalAsBuiltRequestSchema.parse({
+            uploadId: body.uploadId,
+            key: body.key,
+            filename: body.filename,
+            contentType: body.contentType,
+            sizeBytes: body.sizeBytes,
+            expectedRevision: body.expectedRevision,
+          });
+          const targetOrganizationId = await targetPortalOrganization(body.clientPrefix);
+          return json(200, await publishPortalAsBuilt(
+            targetOrganizationId,
+            opaqueIdSchema.parse(body.buildingId),
+            opaqueIdSchema.parse(body.inspectionId),
+            input,
+            portalMutationContext("PORTAL_AS_BUILT_PUBLISHED"),
+          ));
+        }
+        if (method === "POST" && path === "/bff/portal/artifact-access") {
+          assertMutationRequest(event, dependencies.portalOrigin, active.session.csrfTokenHash);
+          const body = JSON.parse(event.body ?? "{}") as Record<string, unknown>;
+          const disposition = artifactAccessRequestSchema.parse({ disposition: body.disposition }).disposition;
+          const reportType = portalReportTypeSchema.parse(body.reportType);
+          const targetOrganizationId = await targetPortalOrganization(body.clientPrefix);
+          const artifact = await resolvePortalArtifact(
+            targetOrganizationId,
+            opaqueIdSchema.parse(body.buildingId),
+            opaqueIdSchema.parse(body.inspectionId),
+            reportType,
+          );
+          return json(200, await signedArtifactRead(
+            artifact.key,
+            disposition,
+            artifact.filename,
+            artifact.contentType,
+          ));
         }
         if (method === "GET" && path === "/bff/portal/how-to-read/current") {
           const guide = await currentHowToReadForOrg(organizationId);
@@ -534,6 +689,7 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
           return json(400, { error: "invalid_request" });
         }
         if (method === "GET" && path === "/bff/portal/file") {
+          if (!admin) return json(403, { error: "forbidden" });
           const prefix = query(event, "prefix") ?? "";
           const key = query(event, "key") ?? "";
           const status = await loadPortalStatus(prefix);
@@ -543,6 +699,7 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
           return json(200, { url: await signedRead(key) });
         }
         if (method === "GET" && path === "/bff/portal/building") {
+          if (!admin) return json(403, { error: "forbidden" });
           const prefix = query(event, "prefix") ?? "";
           if (!(await ownsPrefix(organizationId, admin, prefix))) return json(404, { error: "not_found" });
           const status = await loadPortalStatus(prefix);
@@ -569,6 +726,7 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
         }
         if (method === "POST" && path === "/bff/portal/building") {
           assertMutationRequest(event, dependencies.portalOrigin, active.session.csrfTokenHash);
+          if (!admin) return json(403, { error: "forbidden" });
           const payload = JSON.parse(event.body ?? "{}") as Record<string, unknown>;
           const prefix = String(payload.prefix || "");
           const statusSnapshot = await loadPortalStatusVersion(prefix);

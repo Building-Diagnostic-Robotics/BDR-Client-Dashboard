@@ -1,0 +1,233 @@
+.page {
+  display: grid;
+  gap: var(--space-8, 2rem);
+}
+
+.backLink {
+  align-items: center;
+  color: var(--color-text-muted, #596273);
+  display: inline-flex;
+  font-weight: 700;
+  gap: var(--space-2, 0.5rem);
+  text-decoration: none;
+  width: fit-content;
+}
+
+.hero {
+  align-items: flex-start;
+  display: flex;
+  gap: var(--space-6, 1.5rem);
+  justify-content: space-between;
+}
+
+.hero h1 {
+  font-size: clamp(2.25rem, 5vw, 3.75rem);
+  line-height: 1.05;
+  margin: 0;
+}
+
+.address,
+.engineers {
+  color: var(--color-text-muted, #596273);
+  font-size: 1.125rem;
+  margin: var(--space-2, 0.5rem) 0 0;
+}
+
+.editPanel,
+.adminPanel {
+  background: var(--color-surface, #fff);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg, 16px);
+  padding: var(--space-6, 1.5rem);
+}
+
+.formGrid {
+  display: grid;
+  gap: var(--space-4, 1rem);
+}
+
+.formGrid label {
+  display: grid;
+  font-weight: 700;
+  gap: var(--space-2, 0.5rem);
+}
+
+.formGrid input,
+.formGrid select {
+  background: #fff;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md, 10px);
+  font: inherit;
+  min-height: 48px;
+  padding: 0.75rem 0.875rem;
+}
+
+.help {
+  color: var(--color-text-muted, #667085);
+  font-size: 0.875rem;
+  font-weight: 400;
+  margin: 0;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3, 0.75rem);
+}
+
+.inspectionList {
+  display: grid;
+  gap: var(--space-6, 1.5rem);
+}
+
+.previousInspections {
+  display: grid;
+  gap: var(--space-4, 1rem);
+}
+
+.previousInspections > h2 {
+  margin: var(--space-2, 0.5rem) 0 0;
+}
+
+.inspection {
+  background: var(--color-surface, #fff);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg, 16px);
+  box-shadow: 0 10px 30px rgb(17 24 39 / 5%);
+  overflow: hidden;
+}
+
+.latest {
+  border-color: #8ee2a1;
+}
+
+.inspectionHeader {
+  align-items: center;
+  display: flex;
+  gap: var(--space-5, 1.25rem);
+  justify-content: space-between;
+  padding: var(--space-6, 1.5rem);
+}
+
+.inspectionHeader h2 {
+  margin: 0.35rem 0 0;
+}
+
+.inspectionHeader p {
+  color: var(--color-text-muted, #667085);
+  margin: 0.35rem 0 0;
+}
+
+.pill {
+  background: #e7f8eb;
+  border-radius: 999px;
+  color: #2f7a40;
+  display: inline-flex;
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  padding: 0.3rem 0.65rem;
+  text-transform: uppercase;
+}
+
+.headerActions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3, 0.75rem);
+  justify-content: flex-end;
+}
+
+.reportList {
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.reportRow {
+  align-items: center;
+  display: grid;
+  gap: var(--space-5, 1.25rem);
+  grid-template-columns: minmax(240px, 1fr) minmax(150px, auto) auto;
+  padding: var(--space-5, 1.25rem) var(--space-6, 1.5rem);
+}
+
+.reportRow + .reportRow {
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.reportInfo h3,
+.reportInfo p {
+  margin: 0;
+}
+
+.reportInfo p {
+  color: var(--color-text-muted, #667085);
+  margin-top: 0.35rem;
+}
+
+.reportStatus {
+  align-items: flex-end;
+  display: grid;
+  gap: 0.35rem;
+  justify-items: start;
+}
+
+.publishedDate {
+  color: var(--color-text-muted, #667085);
+  font-size: 0.8125rem;
+}
+
+.loading {
+  min-height: 440px;
+}
+
+.skeletonLine {
+  animation: pulse 1.4s ease-in-out infinite;
+  background: #e7e9ee;
+  border-radius: 8px;
+  height: 24px;
+  margin-bottom: 1rem;
+  max-width: 420px;
+}
+
+.skeletonLine:first-child {
+  height: 56px;
+  width: 55%;
+}
+
+.error {
+  color: #b42318;
+  margin: 0;
+}
+
+.adminRows {
+  display: grid;
+  gap: var(--space-3, 0.75rem);
+}
+
+.adminRow {
+  align-items: center;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+@media (max-width: 800px) {
+  .hero,
+  .inspectionHeader {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .headerActions {
+    justify-content: flex-start;
+  }
+
+  .reportRow {
+    grid-template-columns: 1fr;
+  }
+}

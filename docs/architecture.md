@@ -5,7 +5,7 @@
 The BDR Inspections Dashboard is the client-facing portal. It has two data paths, described in [backend](./backend.md) and [frontend](./frontend.md).
 
 - **Registry.** DynamoDB projects, inspections, and private portal-bucket PDFs. Staff publish those with the `portal-admin` CLI and the Portal Admin API. ReportGen does not write those tables or buckets.
-- **Shared buildings.** ReportGen and this dashboard both use `reportgen_portal/org_links.json` and `{building}reportgen/client_portal/` on `bdr-roofus-uploads`. ReportGen releases a building and sends a PDF. A portal administrator approves it here before a client can open it.
+- **Shared buildings.** ReportGen and this dashboard use `reportgen_portal/org_links.json` and approved report state under `{building}reportgen/client_portal/` on `bdr-roofus-uploads`. The dashboard adds an opaque physical-building/inspection catalog in tenant DynamoDB so multiple source uploads can be grouped deliberately without treating S3 paths as tenant or building identity.
 
 History: [CHANGELOG.md](../CHANGELOG.md).
 
@@ -84,6 +84,12 @@ CloudWatch alarms cover Lambda errors/throttles, API 5xx responses, DynamoDB thr
 
 ## Shared building portal
 
-The dashboard’s building list, building view, map, review queue, and organization tools use a second path on the Client BFF. That path reads and writes building status JSON in the shared data bucket. It does not publish into the inspection registry. Clients only receive buildings linked to their organization. Portal administrator actions, including approval, report-history hiding, client-user management, and inviting another administrator, require an admin-pool session. History hiding is stored on the building status as `historyHidden` and `hiddenHistoryKeys`. It does not remove the building or the PDF.
+The shared path does not publish into the inspection registry. S3 remains the source of approved ReportGen artifacts and upload-completion evidence. The tenant table stores the physical building, ordered inspections, selected source sections, report classifications, optional published As-built artifact, revision, and exclusive source claims. Existing client-visible sources are represented provisionally with deterministic opaque IDs; the first edit or administrative workflow materializes the record.
+
+An administrator discovers S3 candidates and explicitly attaches only completed sections to a physical building. Partial or interrupted sections fail closed. The latest inspection is derived from scan/upload time, and earlier attached inspections become previous inspections. Report version history inside one source is not presented as a previous physical inspection.
+
+Clients receive five fixed report types per inspection: Roof Assessment, Inspection Evidence, Roof Takeoff, As-built, and Capital Planning. Approved non-stale source artifacts and explicitly published As-built files are Available. Other rows use administrator-controlled In preparation or Not included classifications. File authorization resolves the S3 key on the server from the caller’s organization plus opaque building, inspection, and report identifiers.
+
+Building metadata edits do not alter publication state. Attachment, classification, metadata materialization/update, and As-built publication use optimistic revisions and append an audit event in the same DynamoDB transaction. The legacy raw status/action endpoint is retained for administrator operations and rejects client sessions.
 
 See [backend](./backend.md), [frontend](./frontend.md), [API contracts](./api-contracts.md), [project layout](./project_layout.md), and the [runbooks](./runbooks/).

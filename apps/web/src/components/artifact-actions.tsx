@@ -10,10 +10,12 @@ type Disposition = "VIEW" | "DOWNLOAD";
 
 export function ArtifactActions({
   accessPath,
+  requestBody,
   label,
   compact = false,
 }: {
   accessPath: string;
+  requestBody?: Readonly<Record<string, unknown>> | undefined;
   label: string;
   compact?: boolean;
 }) {
@@ -29,7 +31,7 @@ export function ArtifactActions({
     try {
       const access = await postClient(
         accessPath,
-        { disposition },
+        { ...requestBody, disposition },
         artifactAccessResponseSchema,
       );
       if (disposition === "VIEW") {

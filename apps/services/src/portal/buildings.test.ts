@@ -8,6 +8,7 @@ import {
   createPortalAdmin,
   listPortalBuildings,
   mergePortalListMetadata,
+  normalizePortalTimestamp,
   replaceClientEmail,
   summary,
 } from "./buildings";
@@ -15,6 +16,22 @@ import {
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
+});
+
+describe("portal timestamp normalization", () => {
+  it("converts a timezone-less source timestamp using its IANA timezone", () => {
+    expect(normalizePortalTimestamp(
+      "2026-05-13T12:09:04.487373",
+      "America/New_York",
+    )).toBe("2026-05-13T16:09:04.487Z");
+  });
+
+  it("preserves an absolute instant in canonical UTC form", () => {
+    expect(normalizePortalTimestamp(
+      "2026-09-15T14:00:00-04:00",
+      "America/New_York",
+    )).toBe("2026-09-15T18:00:00.000Z");
+  });
 });
 
 describe("shared building client visibility", () => {
@@ -169,6 +186,7 @@ describe("shared building summary and latest report update", () => {
       {
         displayName: "Main Tower",
         address: "100 Main Street",
+        scanTime: "2026-09-15T18:00:00.000Z",
         latestReportUpdate: "2026-09-16T12:00:00.000Z",
       },
     ]);

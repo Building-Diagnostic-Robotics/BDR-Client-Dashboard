@@ -302,6 +302,34 @@ describe("client BFF routes", () => {
     expect(response.body).not.toContain(identity.organizationId);
   });
 
+  it("rejects the retired raw building-status route for client sessions", async () => {
+    const resources = {
+      policy: {
+        loadActiveClientContext: vi.fn(async () => ({
+          issuer: identity.issuer,
+          sub: identity.sub,
+          userId: identity.userId,
+          organization: {
+            organizationId: identity.organizationId,
+            displayName: "Midland Holdings",
+            status: "ACTIVE",
+          },
+        })),
+      },
+    } as never;
+    const handler = createClientBffHandler({
+      portalOrigin: "https://portal.example.com",
+      service: service(),
+      resources,
+    });
+
+    const response = await handler(event("GET", "/bff/portal/building", {
+      queryStringParameters: { prefix: "client/robot/date/building/" },
+    }));
+
+    expect(response.statusCode).toBe(403);
+  });
+
   it("returns an explicit conflict response for stale conditional writes", async () => {
     const resources = {
       policy: {
@@ -446,4 +474,3 @@ describe("client BFF routes", () => {
     expect(signedReadWithDisposition).toHaveBeenCalledWith("reportgen_portal/how_to_read/org/guide.pdf", "VIEW");
   });
 });
-

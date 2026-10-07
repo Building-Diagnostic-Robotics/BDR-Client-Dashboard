@@ -477,6 +477,7 @@ export class PortalStack extends Stack {
 
     this.addDynamoPolicy(clientBff, [tables.identity, tables.tenantData], [
       "GetItem",
+      "BatchGetItem",
       "PutItem",
       "Query",
       "UpdateItem",
@@ -510,6 +511,7 @@ export class PortalStack extends Stack {
           "arn:aws:s3:::bdr-roofus-uploads/*/gnss_session.json",
           "arn:aws:s3:::bdr-roofus-uploads/*/session_config.json",
           "arn:aws:s3:::bdr-roofus-uploads/*/manifest.json",
+          "arn:aws:s3:::bdr-roofus-uploads/*/_UPLOAD_COMPLETE.json",
         ],
       }),
     );

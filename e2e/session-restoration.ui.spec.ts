@@ -16,18 +16,21 @@ async function mockAccount(page: Page) {
     if (path === "/bff/auth/session") await route.fulfill({ json: { authenticated: true } });
     else if (path === "/bff/me") await route.fulfill({ json: { organization: { displayName: state.organization }, admin: false } });
     else if (path === "/bff/portal/buildings") await route.fulfill({ json: { items: [{
-      buildingPrefix: "test-client/robot/2026-09-17/test-building/",
+      buildingId: "pbl_111111111111111111111111",
       displayName: state.building,
       address: "Test Address",
-      scanTime: "2026-09-17T10:00:00-04:00",
-      uploadTime: "2026-09-17T12:00:00-04:00",
-      timeZone: "America/New_York",
-      readyReports: ["ASSESSMENT"],
-      awaitingReports: [],
-      roofTakeoffOnly: false,
-      buildingMark: null,
-      legacy: false,
-      mapReady: false,
+      engineerNames: "",
+      revision: null,
+      latestInspection: {
+        inspectionId: "pin_111111111111111111111111",
+        scannedAt: "2026-09-17T14:00:00.000Z",
+        uploadCompletedAt: "2026-09-17T16:00:00.000Z",
+        timeZone: "America/New_York",
+        availableReportTypes: ["ASSESSMENT"],
+        latestReportUpdate: null,
+      },
+      inspectionCount: 1,
+      provisional: true,
     }], admin: false } });
     else await route.fulfill({ status: 404, json: { error: "not_found" } });
   });

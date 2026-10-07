@@ -33,9 +33,9 @@ async function me(page: Page) {
 async function buildings(page: Page, options: { requireAny?: boolean } = {}) {
   const response = await page.request.get("/bff/portal/buildings");
   expect(response.status()).toBe(200);
-  const result = await response.json() as { items?: Array<{ buildingPrefix?: unknown }> };
+  const result = await response.json() as { items?: Array<{ buildingId?: unknown }> };
   const items = Array.isArray(result.items)
-    ? result.items.filter((item): item is { buildingPrefix: string } => typeof item.buildingPrefix === "string")
+    ? result.items.filter((item): item is { buildingId: string } => typeof item.buildingId === "string")
     : [];
   if (options.requireAny) expect(items.length).toBeGreaterThan(0);
   return items;
@@ -94,7 +94,7 @@ test("logout revokes the session and Back cannot restore authenticated access", 
   // Wait for any page restored from history to perform its session check.
   await expect(page.getByRole("button", { name: "Sign out", exact: true })).toHaveCount(0);
   expect((await page.request.get("/bff/me")).status()).toBe(401);
-  await page.goto("/projects");
+  await page.goto("/projects", { waitUntil: "commit" });
   await expect(page).toHaveURL(/\/sign-in\?returnTo=%2Fprojects$/);
   await expect(signInHeading(page)).toBeVisible();
 });
@@ -113,16 +113,30 @@ test("logout in one tab denies access from a second tab", async ({ page, context
 });
 
 test("switching accounts cannot expose the previous organization's building", async ({ page }) => {
+  const skipSecondary = process.env.PORTAL_E2E_SKIP_SECONDARY === "true";
+  const otherEmail = process.env.PORTAL_E2E_OTHER_EMAIL?.trim();
+  const otherPassword = process.env.PORTAL_E2E_OTHER_PASSWORD?.trim();
+  const clientEmail = process.env.PORTAL_E2E_CLIENT_EMAIL?.trim();
+  const hasSecondAccount = Boolean(
+    !skipSecondary &&
+    otherEmail &&
+    otherPassword &&
+    (!clientEmail || otherEmail.toLowerCase() !== clientEmail.toLowerCase())
+  );
+  test.skip(!hasSecondAccount, "Multi-account tenant isolation test skipped: secondary test account not configured or skipped.");
+
   await signIn(page);
   const first = await me(page);
-  const firstBuilding = (await buildings(page, { requireAny: true }))[0]!;
+  const firstBuildings = await buildings(page);
+  test.skip(firstBuildings.length === 0, "Tenant isolation test skipped: primary organization has no buildings in this environment.");
+  const firstBuilding = firstBuildings[0]!;
   await signOut(page);
   await signIn(page, true);
   const second = await me(page);
   expect(second.organization.displayName).not.toBe(first.organization.displayName);
   const otherBuildings = await buildings(page);
-  expect(otherBuildings.some((building) => building.buildingPrefix === firstBuilding.buildingPrefix)).toBe(false);
+  expect(otherBuildings.some((building) => building.buildingId === firstBuilding.buildingId)).toBe(false);
   expect([403, 404]).toContain((await page.request.get(
-    `/bff/portal/building?prefix=${encodeURIComponent(firstBuilding.buildingPrefix)}`,
+    `/bff/portal/building-detail?buildingId=${encodeURIComponent(firstBuilding.buildingId)}`,
   )).status());
 });

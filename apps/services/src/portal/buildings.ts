@@ -32,6 +32,7 @@ type PortalListMetrics = {
 };
 
 export type PortalBuilding = {
+  buildingId: string;
   buildingPrefix: string;
   displayName: string;
   address: string;
@@ -45,6 +46,26 @@ export type PortalBuilding = {
   legacy: boolean;
   mapReady: boolean;
   latestReportUpdate: string | null;
+  clientVisible: boolean;
+};
+
+export type PortalSourceSection = {
+  sectionId: string;
+  scannedAt: string | null;
+  uploadCompletedAt: string;
+  completionTag: string;
+  eligible: boolean;
+};
+
+export type PortalSourceInspection = {
+  sourceId: string;
+  prefix: string;
+  clientPrefix: string;
+  displayName: string;
+  address: string;
+  engineerNames: string;
+  timeZone: string | null;
+  sections: PortalSourceSection[];
 };
 
 function bucket(): string {
@@ -161,12 +182,38 @@ function organizationIdFor(folder: string): string {
   return `org${createHash("sha256").update(folder).digest("hex")}`.slice(0, 32);
 }
 
+export function portalSourceId(prefix: string): string {
+  return `src_${createHash("sha256").update(prefix.replace(/^\/+|\/+$/g, "")).digest("hex").slice(0, 24)}`;
+}
+
+export function provisionalPortalBuildingId(prefix: string): string {
+  return `pbl_${createHash("sha256").update(prefix.replace(/^\/+|\/+$/g, "")).digest("hex").slice(0, 24)}`;
+}
+
+export function provisionalPortalInspectionId(prefix: string): string {
+  return `pin_${createHash("sha256").update(`inspection:${prefix.replace(/^\/+|\/+$/g, "")}`).digest("hex").slice(0, 24)}`;
+}
+
 function orgRows(links: Record<string, unknown>): OrgLink[] {
   return Array.isArray(links.organizations) ? links.organizations as OrgLink[] : [];
 }
 
 function orgForFolder(rows: OrgLink[], folder: string): OrgLink | undefined {
   return rows.find((row) => (row.clientPrefixes ?? []).some((item) => item.replace(/\/$/, "") === folder));
+}
+
+export async function organizationForClientPrefix(clientPrefix: string): Promise<{ organizationId: string; displayName: string } | null> {
+  const folder = folderOf(clientPrefix);
+  const org = orgForFolder(orgRows(await readJson(LINKS_KEY)), folder);
+  if (!org) return null;
+  return {
+    organizationId: String(org.organizationId || organizationIdFor(folder)),
+    displayName: String(org.displayName || folder),
+  };
+}
+
+export async function linkedPrefixesForOrganization(organizationId: string): Promise<string[]> {
+  return prefixesFor(organizationId, false);
 }
 
 export async function listLinkedClients(): Promise<Array<{ clientPrefix: string; displayName: string; organizationId: string; buildings: number }>> {
@@ -549,6 +596,159 @@ async function buildingsUnder(clientPrefix: string, metrics?: PortalListMetrics)
   return found;
 }
 
+function normalizeEngineerNames(value: unknown): string {
+  if (Array.isArray(value)) return value.map(String).map((name) => name.trim()).filter(Boolean).join(", ");
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function epochIso(value: unknown): string | null {
+  const epoch = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(epoch) || epoch <= 0) return null;
+  const date = new Date(epoch * 1000);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function validTimeZone(value: unknown): string | null {
+  const timeZone = nonEmptyString(value);
+  if (!timeZone) return null;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone }).format();
+    return timeZone;
+  } catch {
+    return null;
+  }
+}
+
+export function normalizePortalTimestamp(value: unknown, timeZone: string | null): string | null {
+  if (typeof value === "number") return epochIso(value);
+  const raw = nonEmptyString(value);
+  if (!raw) return null;
+  if (/(?:Z|[+-]\d{2}:\d{2})$/i.test(raw)) {
+    const absolute = new Date(raw);
+    return Number.isNaN(absolute.getTime()) ? null : absolute.toISOString();
+  }
+
+  const local = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?$/.exec(raw);
+  if (!local) {
+    const parsed = new Date(raw);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  }
+
+  const wallClock = Date.UTC(
+    Number(local[1]),
+    Number(local[2]) - 1,
+    Number(local[3]),
+    Number(local[4]),
+    Number(local[5]),
+    Number(local[6]),
+  );
+  const milliseconds = Number((local[7] ?? "").slice(0, 3).padEnd(3, "0"));
+  let instant = wallClock;
+  if (timeZone) {
+    try {
+      const formatter = new Intl.DateTimeFormat("en-US-u-ca-iso8601", {
+        timeZone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hourCycle: "h23",
+      });
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const parts = Object.fromEntries(
+          formatter.formatToParts(new Date(instant))
+            .filter((part) => part.type !== "literal")
+            .map((part) => [part.type, part.value]),
+        );
+        const representedWallClock = Date.UTC(
+          Number(parts.year),
+          Number(parts.month) - 1,
+          Number(parts.day),
+          Number(parts.hour),
+          Number(parts.minute),
+          Number(parts.second),
+        );
+        const correction = wallClock - representedWallClock;
+        instant += correction;
+        if (correction === 0) break;
+      }
+    } catch {
+      instant = wallClock;
+    }
+  }
+  const parsed = new Date(instant + milliseconds);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+export async function inspectPortalSource(prefixInput: string): Promise<PortalSourceInspection> {
+  const prefix = `${prefixInput.replace(/^\/+|\/+$/g, "")}/`;
+  const parts = prefix.replace(/\/$/, "").split("/");
+  if (parts.length !== 4) throw new Error("invalid_request");
+  const [status, general, children] = await Promise.all([
+    readJson(`${prefix}reportgen/client_portal/status.json`),
+    readJson(`${prefix}general_data.json`),
+    listChildren(prefix),
+  ]);
+  const identity = mergePortalListMetadata(status, general);
+  const sections: PortalSourceSection[] = [];
+  let timeZone: string | null = validTimeZone(status.timeZone);
+  for (const child of children) {
+    const sectionId = child.replace(prefix, "").replace(/\/$/, "");
+    if (!/^section_/i.test(sectionId)) continue;
+    const [metadata, upload] = await Promise.all([
+      readFirst([`${child}gnss_session.json`, `${child}session_config.json`]),
+      readJson(`${child}_UPLOAD_COMPLETE.json`),
+    ]);
+    const uploadCompletedAt = epochIso(upload.completed_at_epoch);
+    if (!uploadCompletedAt) continue;
+    const completionTag = nonEmptyString(metadata.completion_tag) ?? "unknown";
+    const scannedAt = nonEmptyString(metadata.collection_start_time)
+      ?? nonEmptyString(metadata.driver_boot_time);
+    if (!timeZone) {
+      timeZone = validTimeZone(metadata.timezone)
+        ?? validTimeZone(metadata.timeZone)
+        ?? validTimeZone(metadata.iana_timezone);
+    }
+    sections.push({
+      sectionId,
+      scannedAt,
+      uploadCompletedAt,
+      completionTag,
+      eligible: /^complete(?:_|$)/i.test(completionTag),
+    });
+  }
+  sections.sort((left, right) => left.sectionId.localeCompare(right.sectionId));
+  return {
+    sourceId: portalSourceId(prefix),
+    prefix,
+    clientPrefix: parts[0]!,
+    displayName: String(identity.displayName || parts[3] || "Building"),
+    address: String(identity.address || ""),
+    engineerNames: normalizeEngineerNames(status.engineers ?? general.engineers),
+    timeZone,
+    sections: sections.map((section) => ({
+      ...section,
+      scannedAt: normalizePortalTimestamp(section.scannedAt, timeZone),
+    })),
+  };
+}
+
+export async function discoverPortalSources(clientPrefix: string): Promise<PortalSourceInspection[]> {
+  const folder = folderOf(clientPrefix);
+  if (!folder || !(await organizationForClientPrefix(folder))) throw new Error("not_found");
+  const prefixes = await buildingsUnder(folder);
+  const inspected = await Promise.all(prefixes.map((prefix) => inspectPortalSource(prefix)));
+  return inspected
+    .filter((source) => source.sections.length > 0)
+    .sort((left, right) => {
+      const leftTime = left.sections.reduce((max, section) => Math.max(max, Date.parse(section.uploadCompletedAt)), 0);
+      const rightTime = right.sections.reduce((max, section) => Math.max(max, Date.parse(section.uploadCompletedAt)), 0);
+      return rightTime - leftTime;
+    });
+}
+
 export function reportFileMatches(reportType: string, key: string): boolean {
   const name = (key.split("/").pop() || "").toLowerCase().replace(/[_\s-]/g, "");
   if (!name || name.includes("howtoread") || name.includes("compressed")) return false;
@@ -725,6 +925,7 @@ export async function enrichPortalStatus(prefix: string, status: Record<string, 
 }
 
 export function summary(prefix: string, status: Record<string, unknown>): PortalBuilding {
+  const timeZone = validTimeZone(status.timeZone);
   const reports = status.reports && typeof status.reports === "object"
     ? status.reports as Record<string, {
         clientVisible?: boolean;
@@ -760,12 +961,13 @@ export function summary(prefix: string, status: Record<string, unknown>): Portal
 
   const parts = prefix.replace(/\/$/, "").split("/");
   return {
+    buildingId: provisionalPortalBuildingId(prefix),
     buildingPrefix: prefix,
     displayName: String(status.displayName || parts[parts.length - 1] || prefix),
     address: String(status.address || ""),
-    scanTime: status.scanTime ? String(status.scanTime) : null,
-    uploadTime: status.uploadTime ? String(status.uploadTime) : null,
-    timeZone: status.timeZone ? String(status.timeZone) : null,
+    scanTime: normalizePortalTimestamp(status.scanTime, timeZone),
+    uploadTime: normalizePortalTimestamp(status.uploadTime, timeZone),
+    timeZone,
     readyReports: ready,
     awaitingReports: awaiting,
     roofTakeoffOnly: Boolean(status.roofTakeoffOnly),
@@ -773,10 +975,15 @@ export function summary(prefix: string, status: Record<string, unknown>): Portal
     legacy: Boolean(status.legacyVisible),
     mapReady: Boolean(status.mapReady) && ready.some((name) => name === "ASSESSMENT" || name === "EVIDENCE"),
     latestReportUpdate: newestTimestamp,
+    clientVisible: clientCanSee(status, null, false),
   };
 }
 
-export async function listPortalBuildings(organizationId: string | null, admin: boolean): Promise<PortalBuilding[]> {
+export async function listPortalBuildings(
+  organizationId: string | null,
+  admin: boolean,
+  clientPrefixesOverride?: readonly string[],
+): Promise<PortalBuilding[]> {
   const startedAt = Date.now();
   const metrics: PortalListMetrics = { getObjectCount: 0, listObjectCount: 0 };
   let clientPrefixCount = 0;
@@ -784,7 +991,9 @@ export async function listPortalBuildings(organizationId: string | null, admin: 
   let returnedBuildingCount = 0;
   let outcome = "success";
   try {
-    const clientPrefixes = await prefixesFor(organizationId, admin, metrics);
+    const clientPrefixes = clientPrefixesOverride
+      ? [...clientPrefixesOverride]
+      : await prefixesFor(organizationId, admin, metrics);
     clientPrefixCount = clientPrefixes.length;
     const prefixes = (await Promise.all(
       clientPrefixes.map((clientPrefix) => buildingsUnder(clientPrefix, metrics)),
@@ -854,6 +1063,35 @@ export async function signedReadWithDisposition(
   return {
     url: await getSignedUrl(s3, command, { expiresIn: 300 }),
     expiresInSeconds: 300,
+  };
+}
+
+export async function signedArtifactRead(
+  key: string,
+  disposition: "VIEW" | "DOWNLOAD",
+  filename: string,
+  contentType: string,
+): Promise<{ url: string; expiresInSeconds: number }> {
+  const mode = disposition === "DOWNLOAD" ? "attachment" : "inline";
+  const safeFilename = filename.replace(/["\\\r\n]/g, "-") || "BDR-report";
+  const command = new GetObjectCommand({
+    Bucket: bucket(),
+    Key: key,
+    ResponseContentType: contentType,
+    ResponseCacheControl: "private, no-store",
+    ResponseContentDisposition: `${mode}; filename="${safeFilename}"`,
+  });
+  return {
+    url: await getSignedUrl(s3, command, { expiresIn: 300 }),
+    expiresInSeconds: 300,
+  };
+}
+
+export async function portalObjectMetadata(key: string): Promise<{ sizeBytes: number; contentType: string | null }> {
+  const head = await s3.send(new HeadObjectCommand({ Bucket: bucket(), Key: key }));
+  return {
+    sizeBytes: head.ContentLength ?? 0,
+    contentType: head.ContentType ?? null,
   };
 }
 
