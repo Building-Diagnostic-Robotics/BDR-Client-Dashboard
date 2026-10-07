@@ -91,12 +91,11 @@ test("logout revokes the session and Back cannot restore authenticated access", 
   });
   expect(replay.status()).toBe(401);
   await page.goBack();
-  // Wait for any page restored from history to perform its session check.
-  await expect(page.getByRole("button", { name: "Sign out", exact: true })).toHaveCount(0);
-  expect((await page.request.get("/bff/me")).status()).toBe(401);
-  await page.goto("/projects", { waitUntil: "commit" });
+  // Wait for the restored page to detect the revoked session and redirect to sign in.
   await expect(page).toHaveURL(/\/sign-in\?returnTo=%2Fprojects$/);
   await expect(signInHeading(page)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sign out", exact: true })).toHaveCount(0);
+  expect((await page.request.get("/bff/me")).status()).toBe(401);
 });
 
 test("logout in one tab denies access from a second tab", async ({ page, context }) => {

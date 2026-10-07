@@ -459,8 +459,8 @@ function ProjectsPageContent() {
                   <Link
                     className="project-card"
                     href={project.buildingId
-                      ? `/buildings/view?buildingId=${encodeURIComponent(project.buildingId)}&client=${encodeURIComponent(clientName(project.buildingPrefix))}`
-                      : `/buildings/view?prefix=${encodeURIComponent(project.buildingPrefix)}`}
+                      ? `/buildings/view?prefix=${encodeURIComponent(project.buildingPrefix)}&buildingId=${encodeURIComponent(project.buildingId)}&client=${encodeURIComponent(clientName(project.buildingPrefix))}`
+                      : `/buildings/view?prefix=${encodeURIComponent(project.buildingPrefix)}&client=${encodeURIComponent(clientName(project.buildingPrefix))}`}
                     key={project.buildingPrefix}
                   >
                     <div className="project-card__body">
