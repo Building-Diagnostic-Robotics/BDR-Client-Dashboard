@@ -21,21 +21,26 @@ import type {
 import { auditExpiresAt, auditKeys, conflict, notFound, sha256, tenantKeys } from "@bdr/domain";
 
 import {
+  allowedClientKey,
   discoverPortalSources,
   inspectPortalSource,
   linkedPrefixesForOrganization,
   listLinkedClients,
   listPortalBuildings,
   loadPortalStatus,
+  loadPortalReportStatus,
   normalizePortalTimestamp,
   portalObjectMetadata,
   portalSourceId,
   provisionalPortalBuildingId,
   provisionalPortalInspectionId,
+  reportFileMatches,
+  resolvePortalArtifactSource,
   signedUpload,
   type PortalBuilding,
   type PortalSourceInspection,
 } from "./buildings";
+import { reportDownloadFilename } from "./artifact-filenames";
 
 const REPORT_ORDER: readonly PortalReportType[] = [
   "ASSESSMENT",
@@ -186,19 +191,6 @@ async function sourceClaims(prefixes: readonly string[]): Promise<Map<string, Re
   return claims;
 }
 
-function filenameFor(type: PortalReportType, key: string): string {
-  const source = key.split("/").pop()?.trim();
-  if (source) return source;
-  const labels: Record<PortalReportType, string> = {
-    ASSESSMENT: "Roof Assessment.pdf",
-    EVIDENCE: "Inspection Evidence.pdf",
-    ROOF_TAKEOFF: "Roof Takeoff.pdf",
-    AS_BUILT: "As-built",
-    CAPITAL_PLANNING: "Capital Planning.pdf",
-  };
-  return labels[type];
-}
-
 function sourceFingerprint(source: PortalSourceInspection, includedSectionIds: readonly string[]): string {
   const rows = source.sections
     .filter((section) => includedSectionIds.includes(section.sectionId))
@@ -300,7 +292,8 @@ async function resolveBuilding(
   }));
   if (result.Item && isStoredBuilding(result.Item)) {
     if (includeHidden || result.Item.clientVisible) return { item: result.Item, provisional: false };
-    const inspectionViews = await Promise.all(sortInspections(result.Item.inspections).map(inspectionView));
+    const item = result.Item;
+    const inspectionViews = await Promise.all(sortInspections(item.inspections).map((inspection) => inspectionView(inspection, item)));
     if (!inspectionViews.some((inspection) => inspection.availableReportTypes.length > 0)) notFound();
     return { item: result.Item, provisional: false, inspectionViews };
   }
@@ -313,25 +306,58 @@ async function resolveBuilding(
   return { item: provisionalItem(organizationId, row, source), provisional: true };
 }
 
-async function reportView(inspection: StoredInspection): Promise<{ reports: PortalReport[]; artifacts: Map<PortalReportType, ResolvedArtifact> }> {
+function publishedArtifact(
+  building: Pick<StoredBuilding, "organizationId" | "buildingId" | "displayName">,
+  inspection: StoredInspection,
+  type: PortalReportType,
+  status: Record<string, unknown>,
+): ResolvedArtifact | null {
+  if (type === "AS_BUILT") {
+    const published = inspection.asBuilt;
+    if (!published) return null;
+    const root = `reportgen_portal/as-built/${building.organizationId}/${building.buildingId}/${inspection.inspectionId}/drafts/`;
+    const extension = published.contentType === "application/pdf" ? "pdf"
+      : published.contentType === "image/png" ? "png" : published.contentType === "image/jpeg" ? "jpg" : null;
+    if (!extension || !published.key.startsWith(root)
+      || !new RegExp(`^upl_[a-f0-9]{32}/as-built\\.${extension}$`).test(published.key.slice(root.length))
+      || !Number.isFinite(Date.parse(published.publishedAt))) return null;
+    return {
+      key: published.key,
+      filename: reportDownloadFilename(building.displayName, type, published.contentType),
+      contentType: published.contentType,
+    };
+  }
+  const reports = status.reports;
+  if (!reports || typeof reports !== "object" || Array.isArray(reports)) return null;
+  const report = (reports as Record<string, unknown>)[reportKey(type)];
+  if (!report || typeof report !== "object" || Array.isArray(report)) return null;
+  const row = report as Record<string, unknown>;
+  const key = typeof row.approvedKey === "string" ? row.approvedKey : "";
+  // Approved versions may have opaque filenames. Match the source name when
+  // present, using the same classification rule as operational enrichment.
+  const source = row.sourceKey || key;
+  if (row.clientVisible !== true || row.stale || !key
+    || !allowedClientKey(inspection.sourcePrefix, key)
+    || typeof source !== "string" || !reportFileMatches(reportKey(type), source)) return null;
+  return { key, filename: reportDownloadFilename(building.displayName, type), contentType: "application/pdf" };
+}
+
+async function reportView(inspection: StoredInspection, building: StoredBuilding): Promise<{ reports: PortalReport[]; artifacts: Map<PortalReportType, ResolvedArtifact> }> {
   const status = await loadPortalStatus(inspection.sourcePrefix);
   const sourceReports = status.reports && typeof status.reports === "object"
     ? status.reports as Record<string, Record<string, unknown>>
     : {};
   const artifacts = new Map<PortalReportType, ResolvedArtifact>();
   const reports = REPORT_ORDER.map((type): PortalReport => {
+    const artifact = publishedArtifact(building, inspection, type, status);
+    if (artifact) artifacts.set(type, artifact);
     if (type === "AS_BUILT") {
-      if (inspection.asBuilt) {
-        artifacts.set(type, {
-          key: inspection.asBuilt.key,
-          filename: inspection.asBuilt.filename,
-          contentType: inspection.asBuilt.contentType,
-        });
+      if (artifact && inspection.asBuilt) {
         return {
           reportType: type,
           deliveryStatus: "AVAILABLE",
           publishedAt: inspection.asBuilt.publishedAt,
-          filename: inspection.asBuilt.filename,
+          filename: artifact.filename,
         };
       }
       return {
@@ -342,11 +368,7 @@ async function reportView(inspection: StoredInspection): Promise<{ reports: Port
       };
     }
     const sourceReport = sourceReports[reportKey(type)];
-    const key = typeof sourceReport?.approvedKey === "string" ? sourceReport.approvedKey : "";
-    const available = Boolean(sourceReport?.clientVisible && !sourceReport?.stale && key);
-    if (available) {
-      artifacts.set(type, { key, filename: filenameFor(type, key), contentType: "application/pdf" });
-    }
+    const available = artifact !== null;
     const publishedAtValue = sourceReport?.generatedAt
       ?? sourceReport?.reportgenApprovedAt
       ?? sourceReport?.clientApprovedAt
@@ -356,14 +378,14 @@ async function reportView(inspection: StoredInspection): Promise<{ reports: Port
       reportType: type,
       deliveryStatus: available ? "AVAILABLE" : inspection.reportStatuses[type] ?? DEFAULT_STATUSES[type],
       publishedAt: available ? publishedAt : null,
-      filename: available ? filenameFor(type, key) : null,
+      filename: artifact?.filename ?? null,
     };
   });
   return { reports, artifacts };
 }
 
-async function inspectionView(inspection: StoredInspection): Promise<PortalInspection> {
-  const { reports } = await reportView(inspection);
+async function inspectionView(inspection: StoredInspection, building: StoredBuilding): Promise<PortalInspection> {
+  const { reports } = await reportView(inspection, building);
   const available = reports.filter((report) => report.deliveryStatus === "AVAILABLE");
   const dates = available.map((report) => report.publishedAt).filter((value): value is string => Boolean(value)).sort();
   return {
@@ -398,7 +420,7 @@ function sortInspections(inspections: readonly StoredInspection[]): StoredInspec
 
 async function detailFromResolved(resolved: ResolvedBuilding): Promise<PortalBuildingDetail> {
   const ordered = sortInspections(resolved.item.inspections);
-  const inspections = resolved.inspectionViews ?? await Promise.all(ordered.map(inspectionView));
+  const inspections = resolved.inspectionViews ?? await Promise.all(ordered.map((inspection) => inspectionView(inspection, resolved.item)));
   return {
     buildingId: resolved.item.buildingId,
     displayName: resolved.item.displayName,
@@ -417,12 +439,12 @@ async function storedSummary(
   includeHidden: boolean,
 ): Promise<PortalBuildingSummary | null> {
   const ordered = sortInspections(item.inspections);
-  const latest = ordered[0] ? await inspectionView(ordered[0]) : null;
+  const latest = ordered[0] ? await inspectionView(ordered[0], item) : null;
   let visible = includeHidden
     || item.clientVisible
     || Boolean(latest?.availableReportTypes.length);
   if (!visible && ordered.length > 1) {
-    const previous = await Promise.all(ordered.slice(1).map(inspectionView));
+    const previous = await Promise.all(ordered.slice(1).map((inspection) => inspectionView(inspection, item)));
     visible = previous.some((inspection) => inspection.availableReportTypes.length > 0);
   }
   if (!visible) return null;
@@ -828,11 +850,39 @@ export async function resolvePortalArtifact(
   inspectionId: string,
   type: PortalReportType,
 ): Promise<ResolvedArtifact> {
-  const resolved = await resolveBuilding(organizationId, buildingId);
-  const inspection = resolved.item.inspections.find((candidate) => candidate.inspectionId === inspectionId);
-  if (!inspection) notFound();
-  const { artifacts } = await reportView(inspection);
-  const artifact = artifacts.get(type);
-  if (!artifact) notFound();
-  return artifact;
+  const startedAt = Date.now();
+  let outcome = "error";
+  let provisional = false;
+  try {
+    const result = await document.send(new GetCommand({
+      TableName: table(), Key: tenantKeys.portalBuilding(organizationId, buildingId), ConsistentRead: true,
+    }));
+    let artifact: ResolvedArtifact | null;
+    if (result.Item) {
+      if (!isStoredBuilding(result.Item) || result.Item.organizationId !== organizationId || result.Item.buildingId !== buildingId) notFound();
+      const building = result.Item;
+      const inspection = building.inspections.find((candidate) => candidate.inspectionId === inspectionId);
+      if (!inspection) notFound();
+      // An available published report also makes a legacy unreleased building visible.
+      const status = type === "AS_BUILT" ? {} : await loadPortalReportStatus(inspection.sourcePrefix);
+      artifact = publishedArtifact(building, inspection, type, status);
+    } else {
+      provisional = true;
+      const source = await resolvePortalArtifactSource(organizationId, buildingId);
+      if (provisionalPortalInspectionId(source.prefix) !== inspectionId) notFound();
+      const claims = await sourceClaims([source.prefix]);
+      if (claims.size > 0) notFound();
+      const inspection: StoredInspection = {
+        inspectionId, sourceId: portalSourceId(source.prefix), sourcePrefix: source.prefix,
+        includedSectionIds: [], scannedAt: null, uploadCompletedAt: null, timeZone: null,
+        reportStatuses: { ...DEFAULT_STATUSES }, sourceFingerprint: sha256(source.prefix), asBuilt: null,
+      };
+      artifact = publishedArtifact({ organizationId, buildingId, displayName: source.displayName }, inspection, type, source.status);
+    }
+    if (!artifact) notFound();
+    outcome = "success";
+    return artifact;
+  } finally {
+    console.info(JSON.stringify({ event: "portal_artifact_resolution", reportType: type, provisional, outcome, durationMs: Date.now() - startedAt }));
+  }
 }

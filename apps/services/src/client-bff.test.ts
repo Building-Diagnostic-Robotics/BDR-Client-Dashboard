@@ -5,7 +5,8 @@ import { DomainError, sha256 } from "@bdr/domain";
 import type { APIGatewayProxyEventV2 } from "aws-lambda";
 
 import { createClientBffHandler } from "./client-bff";
-import { currentHowToReadForOrg, signedReadWithDisposition } from "./portal/buildings";
+import { currentHowToReadForOrg, signedArtifactRead, signedReadWithDisposition } from "./portal/buildings";
+import { resolvePortalArtifact } from "./portal/catalog";
 
 vi.mock("./portal/buildings", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./portal/buildings")>();
@@ -13,7 +14,13 @@ vi.mock("./portal/buildings", async (importOriginal) => {
     ...actual,
     currentHowToReadForOrg: vi.fn(),
     signedReadWithDisposition: vi.fn(),
+    signedArtifactRead: vi.fn(),
   };
+});
+
+vi.mock("./portal/catalog", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./portal/catalog")>();
+  return { ...actual, resolvePortalArtifact: vi.fn() };
 });
 
 const csrf = "csrf-token";
@@ -472,5 +479,58 @@ describe("client BFF routes", () => {
       expiresInSeconds: 300,
     });
     expect(signedReadWithDisposition).toHaveBeenCalledWith("reportgen_portal/how_to_read/org/guide.pdf", "VIEW");
+  });
+
+  it.each(["VIEW", "DOWNLOAD"] as const)("authorizes catalog %s access using the session organization and server filename", async (disposition) => {
+    vi.mocked(resolvePortalArtifact).mockReset().mockResolvedValueOnce({
+      key: "approved/report.pdf", filename: "Tower - Roof Assessment.pdf", contentType: "application/pdf",
+    });
+    vi.mocked(signedArtifactRead).mockReset().mockResolvedValueOnce({
+      url: "https://reports.example.com/signed", expiresInSeconds: 300,
+    });
+    const resources = {
+      policy: { loadActiveClientContext: vi.fn(async () => ({ organization: { organizationId: identity.organizationId } })) },
+    } as never;
+    const handler = createClientBffHandler({ portalOrigin: "https://portal.example.com", service: service(), resources });
+    const response = await handler(event("POST", "/bff/portal/artifact-access", {
+      body: JSON.stringify({
+        buildingId: "pbl_111111111111111111111111", inspectionId: "pin_111111111111111111111111",
+        reportType: "ASSESSMENT", disposition, clientPrefix: "other-organization", filename: "untrusted.pdf",
+      }),
+      headers: { origin: "https://portal.example.com", "x-bdr-csrf": csrf },
+      cookies: [`__Host-bdr_client_session=session-id`, `__Host-bdr_csrf=${csrf}`],
+    }));
+    expect(response.statusCode).toBe(200);
+    expect(resolvePortalArtifact).toHaveBeenCalledWith(identity.organizationId, "pbl_111111111111111111111111", "pin_111111111111111111111111", "ASSESSMENT");
+    expect(signedArtifactRead).toHaveBeenCalledWith("approved/report.pdf", disposition, "Tower - Roof Assessment.pdf", "application/pdf");
+    expect(JSON.parse(response.body ?? "{}")).toEqual({ url: "https://reports.example.com/signed", expiresInSeconds: 300 });
+  });
+
+  it("rejects catalog access from another origin before resolving or signing an artifact", async () => {
+    vi.mocked(resolvePortalArtifact).mockReset();
+    vi.mocked(signedArtifactRead).mockReset();
+    const resources = {
+      policy: { loadActiveClientContext: vi.fn(async () => ({ organization: { organizationId: identity.organizationId } })) },
+    } as never;
+    const handler = createClientBffHandler({ portalOrigin: "https://portal.example.com", service: service(), resources });
+    const response = await handler(event("POST", "/bff/portal/artifact-access", {
+      body: JSON.stringify({ buildingId: "pbl_111111111111111111111111", inspectionId: "pin_111111111111111111111111", reportType: "ASSESSMENT", disposition: "DOWNLOAD" }),
+      headers: { origin: "https://evil.example.com", "x-bdr-csrf": csrf },
+      cookies: [`__Host-bdr_client_session=session-id`, `__Host-bdr_csrf=${csrf}`],
+    }));
+    expect(response.statusCode).toBe(403);
+    expect(resolvePortalArtifact).not.toHaveBeenCalled();
+    expect(signedArtifactRead).not.toHaveBeenCalled();
+  });
+
+  it("denies expired catalog sessions before artifact access", async () => {
+    vi.mocked(resolvePortalArtifact).mockReset();
+    const operations = service();
+    operations.authenticate.mockRejectedValueOnce(new DomainError("AUTHENTICATION_REQUIRED", "Session expired"));
+    const resources = { policy: { loadActiveClientContext: vi.fn() } } as never;
+    const handler = createClientBffHandler({ portalOrigin: "https://portal.example.com", service: operations, resources });
+    const response = await handler(event("POST", "/bff/portal/artifact-access"));
+    expect(response.statusCode).toBe(401);
+    expect(resolvePortalArtifact).not.toHaveBeenCalled();
   });
 });

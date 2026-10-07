@@ -26,9 +26,15 @@ export function ArtifactActions({
     setPending(disposition);
     setError(null);
     const previewWindow = disposition === "VIEW" ? window.open("about:blank", "_blank") : null;
-    if (previewWindow) previewWindow.opener = null;
+    if (previewWindow) {
+      previewWindow.opener = null;
+    }
 
     try {
+      if (previewWindow) {
+        previewWindow.document.title = "Opening report…";
+        previewWindow.document.body.textContent = "Opening report…";
+      }
       const access = await postClient(
         accessPath,
         { ...requestBody, disposition },
@@ -53,7 +59,7 @@ export function ArtifactActions({
   }
 
   return (
-    <div className={compact ? "artifact-actions artifact-actions--compact" : "artifact-actions"}>
+    <div className={compact ? "artifact-actions artifact-actions--compact" : "artifact-actions"} aria-busy={pending !== null}>
       <button
         className="button button--outline"
         type="button"

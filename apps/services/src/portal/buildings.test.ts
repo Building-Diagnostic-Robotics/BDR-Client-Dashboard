@@ -7,15 +7,68 @@ import {
   createClientAccount,
   createPortalAdmin,
   listPortalBuildings,
+  loadPortalReportStatus,
   mergePortalListMetadata,
   normalizePortalTimestamp,
   replaceClientEmail,
+  provisionalPortalBuildingId,
+  resolvePortalArtifactSource,
   summary,
 } from "./buildings";
 
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
+});
+
+describe("lean artifact source reads", () => {
+  it("reads only fresh publication status without section, history, or image enrichment", async () => {
+    vi.stubEnv("DATA_BUCKET_NAME", "portal-bucket");
+    const status = { reports: { ASSESSMENT: { clientVisible: true } }, history: [{ key: "old.pdf" }] };
+    const send = vi.spyOn(S3Client.prototype, "send").mockResolvedValue({
+      ETag: '"current"', Body: { transformToString: async () => JSON.stringify(status) },
+    } as never);
+    await expect(loadPortalReportStatus("client/robot/date/building/")).resolves.toEqual(status);
+    expect(send).toHaveBeenCalledOnce();
+    expect(send.mock.calls[0]?.[0]).toBeInstanceOf(GetObjectCommand);
+    expect((send.mock.calls[0]?.[0] as GetObjectCommand).input.Key)
+      .toBe("client/robot/date/building/reportgen/client_portal/status.json");
+  });
+
+  it("discovers only the session organization's prefixes and reads metadata only for the target building", async () => {
+    vi.stubEnv("DATA_BUCKET_NAME", "portal-bucket");
+    const prefix = "client/robot/date/building/";
+    const status = { reports: { ASSESSMENT: { clientVisible: true } } };
+    const json = (value: Record<string, unknown>) => ({
+      ETag: '"current"', Body: { transformToString: async () => JSON.stringify(value) },
+    });
+    const send = vi.spyOn(S3Client.prototype, "send").mockImplementation(async (command) => {
+      if (command instanceof ListObjectsV2Command) {
+        const tree: Record<string, string[]> = {
+          "client/": ["client/robot/"], "client/robot/": ["client/robot/date/"],
+          "client/robot/date/": [prefix, "client/robot/date/other/"],
+        };
+        return { CommonPrefixes: (tree[command.input.Prefix ?? ""] ?? []).map((Prefix) => ({ Prefix })) } as never;
+      }
+      if (command instanceof GetObjectCommand) {
+        if (command.input.Key === "reportgen_portal/org_links.json") return json({ organizations: [
+          { organizationId: "org-client", clientPrefixes: ["client"] },
+          { organizationId: "org-other", clientPrefixes: ["other"] },
+        ] }) as never;
+        if (command.input.Key === `${prefix}reportgen/client_portal/status.json`) return json(status) as never;
+        if (command.input.Key === `${prefix}general_data.json`) return json({ displayName: "Target Tower" }) as never;
+      }
+      throw new Error("Unexpected unrelated metadata read");
+    });
+    await expect(resolvePortalArtifactSource("org-client", provisionalPortalBuildingId(prefix)))
+      .resolves.toEqual({ prefix, displayName: "Target Tower", status });
+    expect(send.mock.calls.filter(([command]) => command instanceof GetObjectCommand)).toHaveLength(3);
+    expect(send.mock.calls.some(([command]) => command instanceof HeadObjectCommand)).toBe(false);
+    status.reports.ASSESSMENT.clientVisible = false;
+    await expect(resolvePortalArtifactSource("org-client", provisionalPortalBuildingId(prefix))).rejects.toThrow("not_found");
+    await expect(resolvePortalArtifactSource("org-client", provisionalPortalBuildingId("other/robot/date/building/")))
+      .rejects.toThrow("not_found");
+  });
 });
 
 describe("portal timestamp normalization", () => {
