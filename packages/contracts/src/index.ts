@@ -3,4 +3,5 @@ export * from "./admin-openapi";
 export * from "./auth";
 export * from "./client";
 export * from "./models";
+export * from "./portal";
 export * from "./publication";

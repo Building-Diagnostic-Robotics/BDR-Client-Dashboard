@@ -240,6 +240,9 @@ describe("portal infrastructure", () => {
     expect(JSON.stringify(clientBffPolicy?.Properties?.PolicyDocument)).toContain(
       "dynamodb:ConditionCheckItem",
     );
+    expect(JSON.stringify(clientBffPolicy?.Properties?.PolicyDocument)).toContain(
+      "dynamodb:BatchGetItem",
+    );
     const clientBffPolicyDocument = clientBffPolicy?.Properties?.PolicyDocument;
     const clientBffStatements = clientBffPolicy?.Properties?.PolicyDocument?.Statement as Array<{
       Action?: string | string[];

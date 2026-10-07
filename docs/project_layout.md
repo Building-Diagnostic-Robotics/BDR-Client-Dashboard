@@ -20,9 +20,9 @@ docs/              Architecture, backend, frontend, contracts, runbooks, and han
 | Area | Responsibility | Important entry points |
 | --- | --- | --- |
 | `apps/web` | Client pages, authenticated dashboard UI, direct artifact actions, browser security headers. | `src/app`, `src/components/portal-shell.tsx`, `src/lib/client-api.ts`. See [frontend](./frontend.md). |
-| `apps/services` | Client BFF, Admin API, authentication, building portal status, upload presigning, publication, artifact signing, and audit export. | `src/client-bff.ts`, `src/admin-api.ts`, `src/portal/buildings.ts`, `src/publisher.ts`. See [backend](./backend.md). |
+| `apps/services` | Client BFF, Admin API, authentication, building portal status, physical-building inspection catalog, upload presigning, publication, artifact signing, and audit export. | `src/client-bff.ts`, `src/admin-api.ts`, `src/portal/buildings.ts`, `src/portal/catalog.ts`, `src/publisher.ts`. See [backend](./backend.md). |
 | `apps/portal-admin` | Current BDR administration client and operator confirmations. | `bin/portal-admin.mjs`, `src/commands.ts`, `src/workflows.ts` |
-| `packages/contracts` | Shared request/response and entity validation. | `src/admin.ts`, `src/publication.ts`, `src/client.ts`, `src/models.ts` |
+| `packages/contracts` | Shared request/response and entity validation. | `src/admin.ts`, `src/publication.ts`, `src/client.ts`, `src/portal.ts`, `src/models.ts` |
 | `packages/domain` | Tenant keys, publication/lifecycle state rules, session checks, and client visibility predicate. | `src/keys.ts`, `src/transitions.ts`, `src/visibility.ts` |
 | `packages/infrastructure` | Environment-specific CDK resources, IAM, CloudWatch, CloudTrail, and Cognito branding. | `bin/app.ts`, `src/portal-stack.ts` |
 
@@ -56,6 +56,7 @@ Shared objects, all on `bdr-roofus-uploads`:
 | Object | Writer | Reader |
 | --- | --- | --- |
 | `reportgen_portal/org_links.json` | ReportGen link, and Client BFF client-folder tools | Both |
+| `reportgen_portal/as-built/{organization}/{building}/{inspection}/drafts/{upload}/*` | Dashboard administrator | Client BFF only after the immutable upload is referenced by a published catalog revision |
 | `{building}reportgen/client_portal/status.json` | Both | Both |
 | `{building}reportgen/client_portal/approved/{TYPE}/*.pdf` | ReportGen on send | Client BFF when a client or admin opens the file |
 

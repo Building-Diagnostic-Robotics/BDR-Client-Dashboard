@@ -19,6 +19,15 @@ describe("live browser test target safeguards", () => {
     expect(liveBaseURL(production)).toBe("https://bdrdashboard.netlify.app");
   });
 
+  it("allows explicit production configuration for a single test organization", () => {
+    expect(liveBaseURL({
+      ...production,
+      PORTAL_E2E_OTHER_EMAIL: undefined,
+      PORTAL_E2E_OTHER_PASSWORD: undefined,
+      PORTAL_E2E_OTHER_ORGANIZATION: undefined,
+    })).toBe("https://bdrdashboard.netlify.app");
+  });
+
   it.each([undefined, "false"])("requires production opt-in (%s)", (value) => {
     expect(() => liveBaseURL({ ...production, PORTAL_E2E_ALLOW_PRODUCTION: value })).toThrow(/ALLOW_PRODUCTION/);
   });

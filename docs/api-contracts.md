@@ -8,6 +8,7 @@ The canonical runtime schemas are in `packages/contracts/src/`. In particular:
 - `publication.ts` defines upload targets, upload sessions, report classifications, and publication requests.
 - `client.ts` defines Client BFF responses and artifact access requests.
 - `models.ts` defines the domain entities and allowed states.
+- `portal.ts` defines physical-building summaries and details, the five shared-portal report types and three delivery states, scan candidates, metadata edits, classification updates, legacy-ID resolution, and As-built upload/publication payloads.
 
 The authenticated Admin API exposes a route inventory at `GET /admin/openapi.json`. It is useful for discovery, but the Zod contracts above are authoritative for request and response shapes.
 
@@ -31,7 +32,7 @@ All client mutations require the expected origin and the `x-bdr-csrf` header. Re
 
 `POST /bff/auth/password` accepts an email, password, and optional MFA or new-password challenge. A completed sign-in sets the session cookie and returns `returnTo`.
 
-The current dashboard also calls the building portal routes under `/bff/portal/*`: building lists and status, file URLs, administrator client-user management, `POST /bff/portal/admins`, and building actions such as approve, history hide, and client edits. Building list items include `awaitingReports`. A client building response omits `historyHidden`, `historyHideReason`, and `hiddenHistoryKeys`, and its `history` array is empty when that history is hidden. Those responses are enforced in `apps/services/src/client-bff.ts` and `apps/services/src/portal/buildings.ts`. They are not yet described by the Zod schemas in `packages/contracts`. Ownership still comes from the session. Administrator-only routes return `403` for a client. See [backend](./backend.md) for the route table and [frontend](./frontend.md) for the pages.
+The current dashboard also calls the physical-building routes under `/bff/portal/*`. Their stable request and response shapes are enforced by `packages/contracts/src/portal.ts`. Every detail contains exactly five rows per inspection: `ASSESSMENT`, `EVIDENCE`, `ROOF_TAKEOFF`, `AS_BUILT`, and `CAPITAL_PLANNING`, each in `AVAILABLE`, `IN_PREPARATION`, or `NOT_INCLUDED`. Source prefixes remain an administrator discovery concern. Client artifact access accepts opaque IDs and a report type; the server resolves the approved S3 key after organization authorization. Administrator-only discovery, attachment, classification, and As-built publication routes return `403` for client sessions. See [backend](./backend.md) for the route table and [frontend](./frontend.md) for the pages.
 
 ## Portal Admin API
 

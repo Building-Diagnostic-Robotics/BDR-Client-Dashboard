@@ -49,6 +49,13 @@ describe("DynamoDB key schema", () => {
     );
   });
 
+  it("uses a global claim key for a shared portal source", () => {
+    expect(tenantKeys.portalSource("a".repeat(64))).toEqual({
+      PK: `PORTAL_SOURCE#${"a".repeat(64)}`,
+      SK: "CLAIM",
+    });
+  });
+
   it("uses base keys for identities and session revocation pointers", () => {
     const issuer = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_example";
     const subject = "subject-0123456789";

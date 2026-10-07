@@ -1,47 +1,85 @@
 import { expect, test } from "@playwright/test";
 
 const clientBuildingA = {
-  buildingPrefix: "org-a/robot-1/2026-09-15/alpha-tower/",
+  buildingId: "pbl_aaaaaaaaaaaaaaaaaaaaaaaa",
   displayName: "Alpha Tower",
   address: "100 Main Street",
-  scanTime: "2026-09-15T14:00:00-04:00",
-  uploadTime: "2026-09-15T16:00:00-04:00",
-  timeZone: "America/New_York",
-  readyReports: ["ASSESSMENT"],
-  latestReportUpdate: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), // 2 hours ago
+  engineerNames: "",
+  revision: null,
+  latestInspection: {
+    inspectionId: "pin_aaaaaaaaaaaaaaaaaaaaaaaa",
+    scannedAt: "2026-09-15T18:00:00.000Z",
+    uploadCompletedAt: "2026-09-15T20:00:00.000Z",
+    timeZone: "America/New_York",
+    availableReportTypes: ["ASSESSMENT"],
+    latestReportUpdate: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+  },
+  inspectionCount: 1,
+  provisional: true,
 };
 
 const clientBuildingB = {
-  buildingPrefix: "org-a/robot-1/2026-09-01/beta-center/",
+  buildingId: "pbl_bbbbbbbbbbbbbbbbbbbbbbbb",
   displayName: "Beta Center",
   address: "500 Market Boulevard",
-  scanTime: "2026-09-01T10:00:00-04:00",
-  uploadTime: "2026-09-01T12:00:00-04:00",
-  timeZone: "America/New_York",
-  readyReports: ["EVIDENCE"],
-  latestReportUpdate: "2026-09-05T12:00:00.000Z", // Older than 24 hours
+  engineerNames: "",
+  revision: null,
+  latestInspection: {
+    inspectionId: "pin_bbbbbbbbbbbbbbbbbbbbbbbb",
+    scannedAt: "2026-09-01T14:00:00.000Z",
+    uploadCompletedAt: "2026-09-01T16:00:00.000Z",
+    timeZone: "America/New_York",
+    availableReportTypes: ["EVIDENCE"],
+    latestReportUpdate: "2026-09-05T12:00:00.000Z",
+  },
+  inspectionCount: 1,
+  provisional: true,
 };
 
 const clientBuildingC = {
-  buildingPrefix: "org-a/robot-2/2026-08-20/gamma-hall/",
+  buildingId: "pbl_cccccccccccccccccccccccc",
   displayName: "Gamma Hall",
   address: "750 University Way",
-  scanTime: null,
-  uploadTime: null,
-  timeZone: "America/New_York",
-  readyReports: ["ROOF_TAKEOFF"],
-  latestReportUpdate: null, // Reports available, no timestamp
+  engineerNames: "",
+  revision: null,
+  latestInspection: {
+    inspectionId: "pin_cccccccccccccccccccccccc",
+    scannedAt: null,
+    uploadCompletedAt: null,
+    timeZone: "America/New_York",
+    availableReportTypes: ["ROOF_TAKEOFF"],
+    latestReportUpdate: null,
+  },
+  inspectionCount: 1,
+  provisional: true,
 };
 
 const clientBuildingD = {
-  buildingPrefix: "org-a/robot-2/2026-08-10/delta-plaza/",
+  buildingId: "pbl_dddddddddddddddddddddddd",
   displayName: "Delta Plaza",
   address: "",
-  scanTime: "invalid-date",
-  uploadTime: null,
-  timeZone: null,
-  readyReports: [], // No reports yet
-  latestReportUpdate: null,
+  engineerNames: "",
+  revision: null,
+  latestInspection: {
+    inspectionId: "pin_dddddddddddddddddddddddd",
+    scannedAt: null,
+    uploadCompletedAt: null,
+    timeZone: null,
+    availableReportTypes: [],
+    latestReportUpdate: null,
+  },
+  inspectionCount: 1,
+  provisional: true,
+};
+
+const adminBuildingA = {
+  ...clientBuildingA,
+  buildingPrefix: "org-a/robot-1/2026-09-15/alpha-tower/",
+  scanTime: clientBuildingA.latestInspection.scannedAt,
+  uploadTime: clientBuildingA.latestInspection.uploadCompletedAt,
+  timeZone: clientBuildingA.latestInspection.timeZone,
+  readyReports: clientBuildingA.latestInspection.availableReportTypes,
+  latestReportUpdate: clientBuildingA.latestInspection.latestReportUpdate,
 };
 
 test.describe("Client Landing Page UI", () => {
@@ -111,7 +149,7 @@ test.describe("Client Landing Page UI", () => {
     await expect(alphaCard).toBeVisible();
     await expect(alphaCard.getByText("Updated 2 hours ago")).toBeVisible();
     await expect(alphaCard.getByText("Sep 15, 2026")).toBeVisible();
-    expect(await alphaCard.getAttribute("href")).toContain("/buildings/view?prefix=");
+    expect(await alphaCard.getAttribute("href")).toBe(`/buildings/view?buildingId=${clientBuildingA.buildingId}`);
 
     // Building B: short date format for > 24 hours
     const betaCard = page.locator('a.project-card', { hasText: 'Beta Center' });
@@ -124,7 +162,7 @@ test.describe("Client Landing Page UI", () => {
     await expect(gammaCard.getByText("Available", { exact: true })).toBeVisible();
     await expect(gammaCard.getByText("No scans yet")).toBeVisible();
 
-    // Building D: no ready reports -> No reports yet; invalid scanTime -> No scans yet
+    // Building D: no ready reports and no scan timestamp
     const deltaCard = page.locator('a.project-card', { hasText: 'Delta Plaza' });
     await expect(deltaCard).toBeVisible();
     await expect(deltaCard.getByText("No address yet")).toBeVisible();
@@ -215,9 +253,19 @@ test.describe("Client Landing Page UI", () => {
         await route.fulfill({ json: { authenticated: true } });
       } else if (path === "/bff/me") {
         await route.fulfill({ json: { organization: { displayName: "Midland Holdings" }, admin: false } });
-      } else if (path === "/bff/portal/building") {
+      } else if (path === "/bff/portal/building-detail") {
         await route.fulfill({
-          json: { displayName: "Alpha Tower", address: "100 Main Street", reports: {}, released: false },
+          json: {
+            buildingId: clientBuildingA.buildingId,
+            displayName: "Alpha Tower",
+            address: "100 Main Street",
+            engineerNames: "",
+            revision: null,
+            latestInspection: null,
+            inspectionCount: 0,
+            provisional: true,
+            inspections: [],
+          },
         });
       } else {
         await route.fulfill({ status: 404, json: { error: "not_found" } });
@@ -229,7 +277,7 @@ test.describe("Client Landing Page UI", () => {
     await expect(navigation.getByRole("link", { name: "How to use" })).toHaveAttribute("aria-current", "page");
     await expect(navigation.locator('a[aria-current="page"]')).toHaveCount(1);
 
-    await page.goto("/buildings/view?prefix=org-a%2Frobot-1%2F2026-09-15%2Falpha-tower%2F");
+    await page.goto(`/buildings/view?buildingId=${clientBuildingA.buildingId}`);
     await expect(navigation.getByRole("link", { name: "Projects" })).toHaveAttribute("aria-current", "page");
     await expect(navigation.locator('a[aria-current="page"]')).toHaveCount(1);
   });
@@ -267,7 +315,7 @@ test.describe("Client Landing Page UI", () => {
       } else if (path === "/bff/portal/buildings") {
         await route.fulfill({
           json: {
-            items: [clientBuildingA],
+            items: [adminBuildingA],
             admin: true,
           },
         });

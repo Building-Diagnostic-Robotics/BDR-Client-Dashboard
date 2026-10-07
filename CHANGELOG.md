@@ -4,6 +4,11 @@ History of this repository from `git log` (newest first). Merge commits are omit
 
 ## Unreleased
 
+- Replace the client building detail page with a physical-building inspection catalog: the latest inspection opens by default, previous inspections remain collapsed, and every inspection shows Roof Assessment, Inspection Evidence, Roof Takeoff, As-built, and Capital Planning with Available, In preparation, or Not included states.
+- Restore secure per-report View, Download, and Download all actions while resolving every S3 object server-side; add editable building identity metadata, explicit administrator scan attachment across every prefix linked to the organization, report classification, and private-draft-then-publish As-built workflows.
+- Introduce opaque physical building and inspection identities with conditional DynamoDB writes, exclusive source claims, and atomic audit records; derive provisional identities for existing data, reject partial scan sections, preserve legacy client bookmarks through an authorized redirect, and close the retired raw status/action routes to client sessions.
+- Normalize legacy timezone-less scan timestamps at the backend boundary so physical-building responses satisfy the shared absolute-time contract and render consistently across client time zones.
+- Replace the building-page empty-state flash with an explicit loading skeleton and keep operational legacy history, map, capital-plan inputs, scan marks, and upload controls out of the client experience.
 - Fix shared-building address fallback so `general_data.json` supplies a missing address even when `status.json` already has a display name; retain `No address yet` when neither source contains a verified value.
 - Speed up the projects landing page by using a lean S3 summary read instead of full building-detail enrichment, loading the How to Read guide independently, and recording non-sensitive S3 operation and duration metrics.
 - Rename the client navigation item from Buildings to Projects and underline only the navigation item selected for the current route.

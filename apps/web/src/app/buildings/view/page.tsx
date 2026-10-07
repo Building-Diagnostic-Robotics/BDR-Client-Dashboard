@@ -1,11 +1,13 @@
 "use client";
 
+import { portalBuildingIdResponseSchema } from "@bdr/contracts";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 
 import { usePortal } from "../../../components/portal-shell";
 import { ClientApiError, getClient, postClient } from "../../../lib/client-api";
+import { CatalogBuildingView } from "./catalog-building-view";
 
 type Status = Record<string, unknown>;
 
@@ -43,7 +45,7 @@ function Aerial({ prefix }: { prefix: string }) {
   return <img src={url} alt="Aerial" style={{ maxWidth: "100%" }} />;
 }
 
-function BuildingView() {
+function LegacyBuildingView() {
   const { admin: portalAdmin } = usePortal();
   const params = useSearchParams();
   const prefix = params.get("prefix") || "";
@@ -445,6 +447,53 @@ function BuildingView() {
       ) : null}
     </section>
   );
+}
+
+function LegacyClientRedirect({ prefix }: { prefix: string }) {
+  const [error, setError] = useState(false);
+  useEffect(() => {
+    let active = true;
+    if (!prefix) {
+      setError(true);
+      return () => { active = false; };
+    }
+    getClient(
+      `/bff/portal/building-id?prefix=${encodeURIComponent(prefix)}`,
+      portalBuildingIdResponseSchema,
+    ).then(({ buildingId }) => {
+      if (active) window.location.replace(`/buildings/view?buildingId=${encodeURIComponent(buildingId)}`);
+    }).catch(() => {
+      if (active) setError(true);
+    });
+    return () => { active = false; };
+  }, [prefix]);
+
+  if (error) {
+    return (
+      <section className="content-state content-state--error" role="alert">
+        <h1>Building unavailable</h1>
+        <p>This building is unavailable or you do not have access to it.</p>
+        <Link className="button button--outline" href="/projects">Back to projects</Link>
+      </section>
+    );
+  }
+  return (
+    <section className="centered-state" aria-busy="true">
+      <span className="spinner" aria-hidden="true" />
+      <p>Opening building…</p>
+    </section>
+  );
+}
+
+function BuildingView() {
+  const { admin } = usePortal();
+  const params = useSearchParams();
+  const buildingId = params.get("buildingId");
+  if (buildingId) {
+    return <CatalogBuildingView buildingId={buildingId} clientPrefix={params.get("client") ?? undefined} />;
+  }
+  const prefix = params.get("prefix") ?? "";
+  return admin ? <LegacyBuildingView /> : <LegacyClientRedirect prefix={prefix} />;
 }
 
 export default function BuildingViewPage() {

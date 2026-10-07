@@ -108,6 +108,18 @@ export const tenantKeys = {
       SK: `DOCUMENT_UPLOAD#HOW_TO_READ#${segment(uploadSessionId, "uploadSessionId")}`,
     };
   },
+  portalBuilding(organizationId: string, buildingId: string): DynamoKey {
+    return {
+      PK: organizationPk(organizationId),
+      SK: `PORTAL_BUILDING#${segment(buildingId, "buildingId")}`,
+    };
+  },
+  portalSource(sourceHash: string): DynamoKey {
+    return {
+      PK: `PORTAL_SOURCE#${segment(sourceHash, "sourceHash")}`,
+      SK: "CLAIM",
+    };
+  },
 };
 
 export const adminControlKeys = {
