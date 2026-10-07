@@ -26,23 +26,23 @@ import styles from "./building-detail.module.css";
 const REPORT_CONTENT: Record<PortalReportType, { name: string; description: string }> = {
   ASSESSMENT: {
     name: "Roof Assessment",
-    description: "Roof conditions, findings, and recommended actions.",
+    description: "Roof condition, moisture maps, identified defects and repair scope",
   },
   EVIDENCE: {
     name: "Inspection Evidence",
-    description: "Documented imagery and observed roof conditions.",
+    description: "Annotated inspection images documenting observed defects with location and severity.",
   },
   ROOF_TAKEOFF: {
     name: "Roof Takeoff",
-    description: "Measured roof areas, perimeters, and quantities.",
+    description: "Detailed roof measurements, areas, perimeters, features, and quantities derived from the inspection.",
   },
   AS_BUILT: {
     name: "As-built",
-    description: "The approved roof plan or reference image provided by BDR.",
+    description: "Roof plan showing verified dimensions, boundaries, penetrations, and key rooftop features.",
   },
   CAPITAL_PLANNING: {
     name: "Capital Planning",
-    description: "Long-term maintenance and budget recommendations.",
+    description: "Multi-year repair and replacement priorities with estimated costs and recommended budget timing.",
   },
 };
 
@@ -131,26 +131,56 @@ function InspectionCard({
     if (downloadStatus || available.length === 0) return;
     setDownloadError(null);
     setDownloadStatus("Preparing…");
+    const controller = new AbortController();
     try {
       const zip = new JSZip();
-      for (let index = 0; index < available.length; index += 1) {
-        const report = available[index]!;
-        setDownloadStatus(`Downloading (${index + 1}/${available.length})…`);
-        const access = await postClient(
-          "/bff/portal/artifact-access",
-          {
-            buildingId: building.buildingId,
-            inspectionId: inspection.inspectionId,
-            reportType: report.reportType,
-            disposition: "DOWNLOAD",
-            ...(clientPrefix ? { clientPrefix } : {}),
-          },
-          artifactAccessResponseSchema,
-        );
-        const response = await fetch(access.url);
-        if (!response.ok) throw new Error("download_failed");
-        zip.file(report.filename ?? `${REPORT_CONTENT[report.reportType].name}.pdf`, await response.blob());
+      let nextIndex = 0;
+      let completed = 0;
+      const result: { failure?: { reason: unknown } } = {};
+      const filenames = new Set<string>();
+      async function worker() {
+        while (!controller.signal.aborted && nextIndex < available.length) {
+          const report = available[nextIndex++]!;
+          let stage = "access";
+          try {
+            const access = await postClient(
+              "/bff/portal/artifact-access",
+              {
+                buildingId: building.buildingId,
+                inspectionId: inspection.inspectionId,
+                reportType: report.reportType,
+                disposition: "DOWNLOAD",
+                ...(clientPrefix ? { clientPrefix } : {}),
+              },
+              artifactAccessResponseSchema,
+            );
+            if (controller.signal.aborted) return;
+            stage = "fetch";
+            const response = await fetch(access.url, { credentials: "omit", cache: "no-store", signal: controller.signal });
+            if (!response.ok) throw new ClientApiError(response.status, "Report download failed.");
+            const blob = await response.blob();
+            if (controller.signal.aborted) return;
+            stage = "archive-entry";
+            const filename = report.filename ?? `${REPORT_CONTENT[report.reportType].name}.pdf`;
+            // Never silently overwrite another report in the archive.
+            if (filenames.has(filename)) throw new Error("duplicate_report_filename");
+            filenames.add(filename);
+            zip.file(filename, blob);
+            completed += 1;
+            setDownloadStatus(`Downloading (${completed}/${available.length})…`);
+          } catch (reason) {
+            if (!controller.signal.aborted) {
+              result.failure = { reason };
+              console.warn({ event: "portal_zip_download_failed", stage, reportType: report.reportType,
+                status: reason instanceof ClientApiError ? reason.status : null });
+              controller.abort();
+            }
+          }
+        }
       }
+      setDownloadStatus(`Downloading (0/${available.length})…`);
+      await Promise.all(Array.from({ length: Math.min(2, available.length) }, () => worker()));
+      if (result.failure) throw result.failure.reason;
       setDownloadStatus("Creating ZIP…");
       const blob = await zip.generateAsync({
         type: "blob",
@@ -159,7 +189,7 @@ function InspectionCard({
       });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
-      const date = inspection.scannedAt ? formatShortDate(inspection.scannedAt).replace(/[\\/:*?"<>|]/g, "-") : "Inspection";
+      const date = inspection.scannedAt ? formatShortDate(inspection.scannedAt, inspection.timeZone ?? "UTC").replace(/[\\/:*?"<>|]/g, "-") : "Inspection";
       anchor.href = url;
       anchor.download = `${building.displayName.replace(/[\\/:*?"<>|]/g, "-")} - ${date}.zip`;
       document.body.appendChild(anchor);
@@ -183,7 +213,7 @@ function InspectionCard({
         <div>
           {latest ? <span className={styles.pill}>Latest inspection</span> : null}
           <h2>{inspection.scannedAt ? formatDate(inspection.scannedAt, inspection.timeZone ?? undefined) : "Inspection date unavailable"}</h2>
-          <p>{formatUploadAge(inspection.uploadCompletedAt)} · {available.length} {available.length === 1 ? "report" : "reports"} available</p>
+          <p>{formatUploadAge(inspection.uploadCompletedAt, Date.now(), inspection.timeZone)} · {available.length} {available.length === 1 ? "report" : "reports"} available</p>
         </div>
         <div className={styles.headerActions}>
           {available.length > 0 ? (

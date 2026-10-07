@@ -22,6 +22,7 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 import { cognitoUserExists, normalizeLoginEmail } from "../auth/cognito-user-pools";
 import { readJsonObject, writeJsonObject, type JsonObjectSnapshot } from "./json-state";
+import { artifactContentDisposition } from "./artifact-filenames";
 
 const s3 = new S3Client({});
 const LINKS_KEY = "reportgen_portal/org_links.json";
@@ -1030,6 +1031,26 @@ export async function loadPortalStatus(prefix: string): Promise<Record<string, u
   return (await loadPortalStatusVersion(prefix)).status;
 }
 
+// Artifact access needs current publication state, not operational page enrichment.
+export async function loadPortalReportStatus(prefix: string): Promise<Record<string, unknown>> {
+  return readJson(`${prefix.replace(/\/?$/, "/")}reportgen/client_portal/status.json`);
+}
+
+export async function resolvePortalArtifactSource(
+  organizationId: string,
+  buildingId: string,
+): Promise<{ prefix: string; displayName: string; status: Record<string, unknown> }> {
+  const linked = await linkedPrefixesForOrganization(organizationId);
+  const prefixes = (await Promise.all(linked.map((prefix) => buildingsUnder(prefix)))).flat();
+  const matches = [...new Set(prefixes)].filter((prefix) => provisionalPortalBuildingId(prefix) === buildingId);
+  if (matches.length !== 1) throw new Error("not_found");
+  const prefix = matches[0]!;
+  const status = await loadPortalReportStatus(prefix);
+  if (!clientCanSee(status, organizationId, false)) throw new Error("not_found");
+  const identity = mergePortalListMetadata(status, await readJson(`${prefix}general_data.json`));
+  return { prefix, displayName: String(identity.displayName || prefix.replace(/\/$/, "").split("/").pop() || "Building"), status };
+}
+
 export type PortalStatusSnapshot = {
   status: Record<string, unknown>;
   eTag: string | null;
@@ -1072,14 +1093,12 @@ export async function signedArtifactRead(
   filename: string,
   contentType: string,
 ): Promise<{ url: string; expiresInSeconds: number }> {
-  const mode = disposition === "DOWNLOAD" ? "attachment" : "inline";
-  const safeFilename = filename.replace(/["\\\r\n]/g, "-") || "BDR-report";
   const command = new GetObjectCommand({
     Bucket: bucket(),
     Key: key,
     ResponseContentType: contentType,
     ResponseCacheControl: "private, no-store",
-    ResponseContentDisposition: `${mode}; filename="${safeFilename}"`,
+    ResponseContentDisposition: artifactContentDisposition(filename, disposition),
   });
   return {
     url: await getSignedUrl(s3, command, { expiresIn: 300 }),

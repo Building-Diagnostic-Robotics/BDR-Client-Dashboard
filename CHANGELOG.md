@@ -4,6 +4,13 @@ History of this repository from `git log` (newest first). Merge commits are omit
 
 ## Unreleased
 
+- Scope catalog download browser assertions to application alerts, require the exact ZIP failure message for duplicate filenames, and serve View/Download fixtures over a temporary local HTTP server with attachment filename and downloaded-content checks for Chromium and WebKit.
+- Improve client report access by resolving fresh publication state without operational section, history, or image enrichment; provisional artifact access discovers only organization-linked prefixes and rejects already claimed sources. Preserve source-based report classification for opaque approved filenames and validate artifact ownership before signing.
+- Suggest sanitized `Building Name - Report Type.pdf` download filenames, use the same names in catalog responses and ZIP entries, retain PNG/JPEG extensions for As-built images, and sign UTF-8 Content-Disposition headers while keeping five-minute private URLs.
+- Fetch at most two available reports concurrently for client Download all, show completion progress, cancel remaining fetches on failure, and reject duplicate ZIP filenames instead of silently overwriting reports. Record sanitized failure stages and artifact resolution duration without signed URLs.
+- Show an opening message in report preview tabs and switch Data uploaded from relative ages to an inspection-local calendar date at 48 hours, using UTC when no timezone is available.
+- Add catalog-specific service, BFF, filename/signing, formatting, and local browser regression coverage. Document the separate, operator-applied shared-report-bucket CORS fix: preserve ReportGen rules and add only dashboard GET/HEAD access. Implementation does not apply AWS changes or run validation suites.
+
 - Restore the full operational administrator building page with report approval, stale toggling, PDF viewing, history visibility controls, scan section marks, building details, capital planning, visit status, and moisture map navigation, while embedding the new physical scan attachment and client report classifications card directly into the admin view.
 - Enable administrator building prefix resolution via `GET /bff/portal/building-id` and link administrator project cards with prefix, building identity, and client context, preserving the dedicated client catalog experience for customer sessions.
 - Harden the live authentication E2E test suite by eliminating navigation interruption races during history restoration across Chromium and WebKit, and add support for single-account live verification with graceful skips when secondary accounts or tenant buildings are absent.

@@ -42,7 +42,7 @@ export function formatReportUpdatedDate(value: string, timeZone?: string, now = 
   return `Updated ${formatShortDate(value, timeZone)}`;
 }
 
-export function formatUploadAge(value: string | null, now = Date.now()): string {
+export function formatUploadAge(value: string | null, now = Date.now(), timeZone?: string | null): string {
   if (!value) return "Upload time unavailable";
   const uploaded = new Date(value).getTime();
   if (Number.isNaN(uploaded)) return "Upload time unavailable";
@@ -52,8 +52,8 @@ export function formatUploadAge(value: string | null, now = Date.now()): string 
   if (minutes < 60) return `Data uploaded ${minutes} min ago`;
   const hours = Math.floor(elapsed / 3_600_000);
   if (hours < 24) return `Data uploaded ${hours} ${hours === 1 ? "hr" : "hrs"} ago`;
-  const days = Math.floor(elapsed / 86_400_000);
-  return `Data uploaded ${days} ${days === 1 ? "day" : "days"} ago`;
+  if (hours < 48) return "Data uploaded 1 day ago";
+  return `Data uploaded on ${formatShortDate(value, timeZone ?? "UTC")}`;
 }
 
 export function formatBuildingScanDate(value: string | null, timeZone?: string | null): string {
@@ -92,4 +92,3 @@ export function formatBuildingReportsStatus(
     return { text: "Available", isNone: false };
   }
 }
-

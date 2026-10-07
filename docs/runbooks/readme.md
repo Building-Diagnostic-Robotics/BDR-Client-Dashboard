@@ -5,6 +5,7 @@
 - [Add an administrator](./add-administrator.md): onboard an additional TOTP-protected administrator in development or production.
 - [Client login branding](./client-login-branding.md): apply the Cognito managed-login branding after creating or replacing a client user pool.
 - [Authentication testing](./authentication-testing.md): live Playwright session and tenant-isolation checks.
+- [Client report downloads](./client-report-downloads.md): preserve shared ReportGen CORS rules while enabling dashboard ZIP reads, then verify filenames and report access.
 - [Cognito email uniqueness](./cognito-email-uniqueness.md): enforce and audit the one-email-one-pool rule.
 - [Audit operations](./audit-operations.md): monthly export, retention, alarms, and recovery checks.
 - [Administrator break-glass](./admin-break-glass.md): recover an administrator who loses their TOTP authenticator.
