@@ -17,7 +17,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { ArtifactActions } from "../../../components/artifact-actions";
-import { ChevronDownIcon, DownloadIcon } from "../../../components/icons";
+import { ChevronDownIcon, ChevronLeftIcon, DownloadIcon } from "../../../components/icons";
 import { usePortal } from "../../../components/portal-shell";
 import { ClientApiError, getClient, loginPath, postClient } from "../../../lib/client-api";
 import { formatDate, formatReportUpdatedDate, formatShortDate, formatUploadAge } from "../../../lib/format";
@@ -34,15 +34,15 @@ const REPORT_CONTENT: Record<PortalReportType, { name: string; description: stri
   },
   ROOF_TAKEOFF: {
     name: "Roof Takeoff",
-    description: "Detailed roof measurements, areas, perimeters, features, and quantities derived from the inspection.",
+    description: "Roof measurements, area, perimeter, features and quantities derived from the inspection.",
   },
   AS_BUILT: {
     name: "As-built",
-    description: "Roof plan showing verified dimensions, boundaries, penetrations, and key rooftop features.",
+    description: "Roof drawing showing dimensions, boundaries, penetrations and key rooftop features.",
   },
   CAPITAL_PLANNING: {
     name: "Capital Planning",
-    description: "Multi-year repair and replacement priorities with estimated costs and recommended budget timing.",
+    description: "Multi-year repair and replacement priorities with estimated costs and budget timing.",
   },
 };
 
@@ -91,10 +91,12 @@ function ReportRow({
         <p>{content.description}</p>
       </div>
       <div className={styles.reportStatus}>
-        <span className={`status ${statusClass(report)}`}>
-          <span className="status__dot" aria-hidden="true" />
-          {STATUS_LABEL[report.deliveryStatus]}
-        </span>
+        {!available ? (
+          <span className={`status ${statusClass(report)}`}>
+            <span className="status__dot" aria-hidden="true" />
+            {STATUS_LABEL[report.deliveryStatus]}
+          </span>
+        ) : null}
         {available && report.publishedAt ? (
           <span className={styles.publishedDate}>{formatReportUpdatedDate(report.publishedAt)}</span>
         ) : null}
@@ -209,15 +211,41 @@ function InspectionCard({
 
   return (
     <section className={`${styles.inspection} ${latest ? styles.latest : ""}`}>
-      <header className={styles.inspectionHeader}>
+      <header
+        className={styles.inspectionHeader}
+        onClick={() => setExpanded((value) => !value)}
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            setExpanded((value) => !value);
+          }
+        }}
+      >
         <div>
           {latest ? <span className={styles.pill}>Latest inspection</span> : null}
           <h2>{inspection.scannedAt ? formatDate(inspection.scannedAt, inspection.timeZone ?? undefined) : "Inspection date unavailable"}</h2>
-          <p>{formatUploadAge(inspection.uploadCompletedAt, Date.now(), inspection.timeZone)} · {available.length} {available.length === 1 ? "report" : "reports"} available</p>
+          <p>
+            {formatUploadAge(inspection.uploadCompletedAt, Date.now(), inspection.timeZone)}
+            {" · "}
+            <span className={styles.reportsAvailable}>
+              {available.length} {available.length === 1 ? "report" : "reports"} available
+            </span>
+          </p>
         </div>
         <div className={styles.headerActions}>
           {available.length > 0 ? (
-            <button className="button button--outline button--sm" type="button" onClick={() => void downloadAll()} disabled={downloadStatus !== null}>
+            <button
+              className="button button--outline button--sm"
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                void downloadAll();
+              }}
+              disabled={downloadStatus !== null}
+            >
               <DownloadIcon /> {downloadStatus ?? "Download all (.zip)"}
             </button>
           ) : null}
@@ -226,7 +254,10 @@ function InspectionCard({
             type="button"
             aria-expanded={expanded}
             aria-label={expanded ? "Collapse inspection reports" : "Expand inspection reports"}
-            onClick={() => setExpanded((value) => !value)}
+            onClick={(event) => {
+              event.stopPropagation();
+              setExpanded((value) => !value);
+            }}
           >
             <ChevronDownIcon className={expanded ? "chevron chevron--expanded" : "chevron"} />
           </button>
@@ -273,7 +304,7 @@ function EditDetails({
         buildingId: building.buildingId,
         displayName: String(data.get("displayName") ?? ""),
         address: String(data.get("address") ?? ""),
-        engineerNames: String(data.get("engineerNames") ?? ""),
+        engineerNames: building.engineerNames,
         expectedRevision: building.revision,
         ...(clientPrefix ? { clientPrefix } : {}),
       }, portalBuildingDetailSchema).then(onSaved).catch((reason) => {
@@ -285,10 +316,6 @@ function EditDetails({
       <h2>Edit details</h2>
       <label>Building name<input name="displayName" defaultValue={building.displayName} required /></label>
       <label>Address<input name="address" defaultValue={building.address} placeholder="Add the building address" /></label>
-      <label>Engineer names
-        <input name="engineerNames" defaultValue={building.engineerNames} placeholder="Tony, Thom, Raul" />
-        <span className={styles.help}>Add all names, separated by commas.</span>
-      </label>
       {error ? <p className={styles.error} role="alert">{error}</p> : null}
       <div className={styles.actions}>
         <button className="button button--primary" type="submit" disabled={busy}>{busy ? "Saving…" : "Save details"}</button>
@@ -607,12 +634,13 @@ export function CatalogBuildingView({ buildingId, clientPrefix }: { buildingId: 
   const building = state.building;
   return (
     <section className={styles.page}>
-      <Link className={styles.backLink} href="/projects">← Back to projects</Link>
+      <Link className={styles.backLink} href="/projects">
+        <ChevronLeftIcon /> Buildings
+      </Link>
       <header className={styles.hero}>
         <div>
           <h1>{building.displayName}</h1>
           <p className={styles.address}>{building.address || "No address yet"}</p>
-          {building.engineerNames ? <p className={styles.engineers}>Engineers: {building.engineerNames}</p> : null}
         </div>
         <button className="button button--outline" type="button" onClick={() => setEditing((value) => !value)}>Edit details</button>
       </header>

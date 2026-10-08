@@ -11,6 +11,16 @@
   gap: var(--space-2, 0.5rem);
   text-decoration: none;
   width: fit-content;
+  transition: color 150ms ease;
+}
+
+.backLink:hover {
+  color: var(--color-text-primary, #111827);
+}
+
+.backLink svg {
+  width: 1.15rem;
+  height: 1.15rem;
 }
 
 .hero {
@@ -21,13 +31,12 @@
 }
 
 .hero h1 {
-  font-size: clamp(2.25rem, 5vw, 3.75rem);
-  line-height: 1.05;
+  font-size: clamp(1.75rem, 3.5vw, 2.5rem);
+  line-height: 1.15;
   margin: 0;
 }
 
-.address,
-.engineers {
+.address {
   color: var(--color-text-muted, #596273);
   font-size: 1.125rem;
   margin: var(--space-2, 0.5rem) 0 0;
@@ -103,10 +112,12 @@
 
 .inspectionHeader {
   align-items: center;
+  cursor: pointer;
   display: flex;
   gap: var(--space-5, 1.25rem);
   justify-content: space-between;
   padding: var(--space-6, 1.5rem);
+  user-select: none;
 }
 
 .inspectionHeader h2 {
@@ -117,6 +128,19 @@
   color: var(--color-text-muted, #667085);
   margin: 0.35rem 0 0;
 }
+
+.reportsAvailable {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  transition: text-decoration-color 150ms ease, color 150ms ease;
+}
+
+.reportsAvailable:hover,
+.inspectionHeader:hover .reportsAvailable {
+  text-decoration-color: currentColor;
+}
+
 
 .pill {
   background: #e7f8eb;
