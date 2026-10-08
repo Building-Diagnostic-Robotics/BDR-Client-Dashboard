@@ -4,6 +4,7 @@ History of this repository from `git log` (newest first). Merge commits are omit
 
 ## Unreleased
 
+- Add an operator-run sample dashboard setup command with a read-only preview, isolated sample source folders, three physical buildings and eight inspections, five sample report types, conditional setup checkpoints, and audited client-account resets with fresh Cognito invitations. Preserve the deployed invitation email template. The command is not executed by implementation and requires explicit apply/reset flags.
 - Scope catalog download browser assertions to application alerts, require the exact ZIP failure message for duplicate filenames, and serve View/Download fixtures over a temporary local HTTP server with attachment filename and downloaded-content checks for Chromium and WebKit.
 - Improve client report access by resolving fresh publication state without operational section, history, or image enrichment; provisional artifact access discovers only organization-linked prefixes and rejects already claimed sources. Preserve source-based report classification for opaque approved filenames and validate artifact ownership before signing.
 - Suggest sanitized `Building Name - Report Type.pdf` download filenames, use the same names in catalog responses and ZIP entries, retain PNG/JPEG extensions for As-built images, and sign UTF-8 Content-Disposition headers while keeping five-minute private URLs.

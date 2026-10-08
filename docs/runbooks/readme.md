@@ -1,6 +1,7 @@
 # Operations runbooks
 
 - [Production client onboarding](./production-client-onboarding.md): create an organization, invite users, upload and publish reports, and archive content.
+- [Sample dashboard setup](./sample-dashboard-setup.md): prepare a dedicated sample organization, publish sample reports, and explicitly reset selected client accounts for fresh invitation testing.
 - [Bootstrap the first administrator](./bootstrap-first-admin.md): one-time production administrator setup.
 - [Add an administrator](./add-administrator.md): onboard an additional TOTP-protected administrator in development or production.
 - [Client login branding](./client-login-branding.md): apply the Cognito managed-login branding after creating or replacing a client user pool.

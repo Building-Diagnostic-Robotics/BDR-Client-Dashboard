@@ -36,9 +36,11 @@ gemini-changes.md
 audit-findings.md
 docs/runbooks/add-administrator.md
 backend-handoff-changes.md
+docs/runbooks/sample-dashboard-setup.md
 
 # Temp
 tmp/
+sample-reports/
 
 # Browser test artifacts can contain authentication material
 test-results/

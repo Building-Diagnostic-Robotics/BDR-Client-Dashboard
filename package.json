@@ -8,6 +8,7 @@
   ],
   "scripts": {
     "dev": "npm run dev --workspace @bdr/web",
+    "sample-dashboard:setup": "npm run setup-sample-dashboard --workspace @bdr/infrastructure --",
     "build": "npm run build --workspace @bdr/contracts && npm run build --workspace @bdr/domain && npm run build --workspace @bdr/services && npm run build --workspace @bdr/infrastructure && npm run build --workspace @bdr/web",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
