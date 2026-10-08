@@ -13,11 +13,13 @@ export function ArtifactActions({
   requestBody,
   label,
   compact = false,
+  downloadVariant = "outline-green",
 }: {
   accessPath: string;
   requestBody?: Readonly<Record<string, unknown>> | undefined;
   label: string;
   compact?: boolean;
+  downloadVariant?: "primary" | "outline" | "outline-green";
 }) {
   const [pending, setPending] = useState<Disposition | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -70,7 +72,13 @@ export function ArtifactActions({
         {pending === "VIEW" ? "Opening…" : "View"}
       </button>
       <button
-        className="button button--primary"
+        className={
+          downloadVariant === "outline-green"
+            ? "button button--outline-green"
+            : downloadVariant === "outline"
+            ? "button button--outline"
+            : "button button--primary"
+        }
         type="button"
         onClick={() => void open("DOWNLOAD")}
         disabled={pending !== null}

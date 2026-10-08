@@ -309,6 +309,18 @@ h3 {
   color: var(--green-700);
 }
 
+.button--outline-green {
+  border-color: var(--green-600);
+  background: var(--white);
+  color: var(--green-700);
+}
+
+.button--outline-green:hover {
+  border-color: var(--green-700);
+  background: var(--green-50);
+  color: var(--green-800);
+}
+
 .button--sm {
   min-height: 2rem;
   padding: 0.35rem 0.75rem;
