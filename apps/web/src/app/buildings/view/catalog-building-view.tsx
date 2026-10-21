@@ -214,15 +214,6 @@ function InspectionCard({
       <header
         className={styles.inspectionHeader}
         onClick={() => setExpanded((value) => !value)}
-        role="button"
-        tabIndex={0}
-        aria-expanded={expanded}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            setExpanded((value) => !value);
-          }
-        }}
       >
         <div>
           {latest ? <span className={styles.pill}>Latest inspection</span> : null}

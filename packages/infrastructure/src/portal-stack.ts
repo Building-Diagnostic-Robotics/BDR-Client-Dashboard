@@ -124,6 +124,14 @@ export class PortalStack extends Stack {
         resources: [identity.clientUserPool.userPoolArn, identity.adminUserPool.userPoolArn],
       }),
     );
+    functions.clientBff.addToRolePolicy(new iam.PolicyStatement({
+      actions: ["cognito-idp:AdminUserGlobalSignOut"], resources: [identity.clientUserPool.userPoolArn],
+    }));
+    for (const fn of [functions.clientBff, functions.adminApi]) {
+      fn.addToRolePolicy(new iam.PolicyStatement({
+        actions: ["cognito-idp:AdminListGroupsForUser"], resources: [identity.adminUserPool.userPoolArn],
+      }));
+    }
     identity.clientSecret.grantRead(functions.clientBff);
     keys.application.grantEncryptDecrypt(functions.clientBff);
     keys.application.grantEncryptDecrypt(functions.adminApi);
@@ -356,6 +364,19 @@ export class PortalStack extends Stack {
       signInAliases: { email: true },
       autoVerify: { email: true },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
+      userInvitation: {
+        emailSubject: "Your BDR Dashboard administrator invitation",
+        emailBody: `<div style="font-family:Arial,sans-serif;line-height:1.6;max-width:560px;margin:auto;padding:24px">
+          <h1>BDR Inspections Dashboard</h1>
+          <p>You have been invited as a BDR administrator.</p>
+          <p><a href="${config.portalOrigin}/bff/auth/admin/login" style="display:inline-block;background:#15803d;color:white;padding:12px 20px;text-decoration:none">Set up your account</a></p>
+          <p>Setup link: <a href="${config.portalOrigin}/bff/auth/admin/login">${config.portalOrigin}/bff/auth/admin/login</a></p>
+          <p><strong>Username:</strong> {username}<br><strong>Temporary password:</strong> {####}</p>
+          <p>Use the setup link to choose a new password and enroll an authenticator app. Your temporary password expires after seven days.</p>
+          <p>After setup, sign in at <a href="${config.portalOrigin}/sign-in">${config.portalOrigin}/sign-in</a>.</p>
+          <p>If the invitation expires, ask your BDR administrator to resend it. Keep your credentials private.</p>
+          <p>The BDR Team</p></div>`,
+      },
       passwordPolicy,
       mfa: cognito.Mfa.REQUIRED,
       mfaSecondFactor: { otp: true, sms: false },
@@ -395,7 +416,7 @@ export class PortalStack extends Stack {
       enableTokenRevocation: true,
       oAuth: {
         flows: { authorizationCodeGrant: true },
-        scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL],
+        scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.COGNITO_ADMIN],
         callbackUrls: [`${config.portalOrigin}/bff/auth/admin/callback`],
         logoutUrls: [`${config.portalOrigin}/logged-out`],
       },
@@ -482,7 +503,7 @@ export class PortalStack extends Stack {
       "Query",
       "UpdateItem",
     ]);
-    this.addDynamoPolicy(clientBff, [tables.adminControl], ["GetItem", "UpdateItem"]);
+    this.addDynamoPolicy(clientBff, [tables.adminControl], ["GetItem", "PutItem", "UpdateItem"]);
     this.addDynamoPolicy(clientBff, [tables.session], [
       "GetItem",
       "PutItem",

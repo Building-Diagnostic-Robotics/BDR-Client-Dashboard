@@ -106,3 +106,33 @@ export type VerifiedAdminToken = z.infer<typeof verifiedAdminTokenSchema>;
 export type Invitation = z.infer<typeof invitationSchema>;
 export type AdminInvitation = z.infer<typeof adminInvitationSchema>;
 export type InvitationStatus = z.infer<typeof invitationStatusSchema>;
+
+export const administratorEnrollmentSchema = z.object({
+  email: z.email(),
+  issuer: z.url(),
+  adminId: opaqueIdSchema,
+  sub: z.string().nullable(),
+  username: z.string().nullable(),
+  status: z.enum(["CREATING", "PREPARED", "DELIVERY_UNCERTAIN", "INVITED", "ACCEPTED"]),
+  actorId: opaqueIdSchema,
+  actorSub: z.string().min(1),
+  createdAt: isoInstantSchema,
+  expiresAt: isoInstantSchema,
+  revision: opaqueIdSchema,
+});
+export const administratorInviteRequestSchema = z.object({ email: z.email(), resend: z.boolean().default(false) }).strict();
+export const clientAccountInviteResponseSchema = z.object({
+  email: z.email(), organizationId: opaqueIdSchema, status: z.enum(["INVITED", "ALREADY_MEMBER", "PENDING"]),
+}).strict();
+export type ClientAccountInviteResponse = z.infer<typeof clientAccountInviteResponseSchema>;
+export const administratorInviteResponseSchema = z.object({
+  email: z.email(), status: z.enum(["INVITED", "ALREADY_ADMIN", "PENDING"]),
+}).strict();
+export const passwordLoginResponseSchema = z.union([
+  z.object({ returnTo: z.string().startsWith("/") }).strict(),
+  z.object({ mfa: z.literal(true), session: z.string().min(1) }).strict(),
+  z.object({ newPassword: z.literal(true), session: z.string().min(1) }).strict(),
+  z.object({ setupRequired: z.literal(true), setupPath: z.string().startsWith("/bff/auth/admin/login?") }).strict(),
+]);
+export type AdministratorEnrollment = z.infer<typeof administratorEnrollmentSchema>;
+export type AdministratorInviteResponse = z.infer<typeof administratorInviteResponseSchema>;

@@ -72,6 +72,36 @@ export const portalBuildingListResponseSchema = z.discriminatedUnion("admin", [
   }).strict(),
 ]);
 
+export const portalAdminClientSchema = z.object({
+  organizationId: opaqueIdSchema,
+  displayName: z.string().trim().min(1).max(200),
+  clientPrefixes: z.array(z.string().trim().min(1).max(240).regex(/^[^/\\]+$/).refine((value) => value !== "." && value !== "..")).min(1),
+}).strict();
+export const portalAdminClientListSchema = z.object({ items: z.array(portalAdminClientSchema) }).strict();
+export const portalAdminBuildingListSchema = z.object({ items: z.array(portalAdminBuildingSummarySchema), admin: z.literal(true) }).strict();
+export const portalAdminBuildingCountSchema = z.object({ count: z.number().int().nonnegative() }).strict();
+export const portalAdminReviewRowSchema = z.object({
+  organizationId: opaqueIdSchema,
+  clientName: z.string().min(1),
+  prefix: z.string().min(1).max(1000),
+  name: z.string().min(1),
+  reportType: portalReportTypeSchema,
+  reportKey: portalReportTypeSchema.or(z.literal("CAPITAL_PLAN")),
+  artifactKey: z.string().min(1).nullable(),
+  generatedAt: z.string().nullable(),
+}).strict().refine((row) => (row.reportKey === "CAPITAL_PLAN" ? "CAPITAL_PLANNING" : row.reportKey) === row.reportType, "Review report key must match its canonical type");
+export const portalAdminReviewResponseSchema = z.object({
+  items: z.array(portalAdminReviewRowSchema),
+  complete: z.boolean(),
+  failures: z.array(z.object({
+    organizationId: opaqueIdSchema,
+    clientName: z.string().min(1),
+    prefix: z.string().nullable(),
+  }).strict()),
+}).strict().refine((value) => value.complete === (value.failures.length === 0), "Review completeness must match failures");
+export const portalFileResponseSchema = z.object({ url: z.url() }).strict();
+export const portalMutationResponseSchema = z.object({ ok: z.literal(true) }).strict();
+
 export const portalBuildingDetailSchema = portalBuildingSummarySchema.extend({
   latestInspection: portalInspectionSchema.nullable(),
   inspections: z.array(portalInspectionSchema),
@@ -151,3 +181,6 @@ export type PortalAdminBuildingSummary = z.infer<typeof portalAdminBuildingSumma
 export type PortalBuildingDetail = z.infer<typeof portalBuildingDetailSchema>;
 export type PortalBuildingIdResponse = z.infer<typeof portalBuildingIdResponseSchema>;
 export type PortalInspectionCandidate = z.infer<typeof portalInspectionCandidateSchema>;
+export type PortalAdminClient = z.infer<typeof portalAdminClientSchema>;
+export type PortalAdminReviewRow = z.infer<typeof portalAdminReviewRowSchema>;
+export type PortalAdminReviewResponse = z.infer<typeof portalAdminReviewResponseSchema>;

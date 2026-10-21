@@ -61,6 +61,8 @@ class FakeStore implements AdminAuthStore {
   session: AdminSession | null = null;
   created = 0;
   revoked = 0;
+  count: number | null = 1;
+  async getActiveAdminCount() { return this.count; }
   async getIdentity() { return this.identity; }
   async getProfile() { return this.profile; }
   async getSession() { return this.session; }
@@ -143,4 +145,15 @@ describe("administrator authorization", () => {
     await expect(auth.logout(event(), "request")).resolves.toContain("/logout?");
     expect(store.revoked).toBe(1);
   });
+});
+
+it("denies both new and existing CLI sessions when the administrator guard is invalid", async () => {
+  const store = new FakeStore();
+  const auth = new AdminAuthService(config, store, new FakeCognito(), () => now);
+  await auth.establish(event(), "request");
+  for (const count of [null, 0, -1, 1.5]) {
+    store.count = count;
+    await expect(auth.establish(event(), "request")).rejects.toBeInstanceOf(DomainError);
+    await expect(auth.authenticate(event())).rejects.toBeInstanceOf(DomainError);
+  }
 });

@@ -84,6 +84,10 @@ export function assertActiveAdminAuthorization(input: {
   }
 }
 
+export function assertActiveAdministratorGuard(count: unknown): asserts count is number {
+  if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 1) forbidden();
+}
+
 export function assertMayDeactivateAdministrator(input: {
   targetAdminId: string;
   targetStatus: AdminProfile["status"];

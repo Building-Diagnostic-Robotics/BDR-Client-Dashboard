@@ -6,6 +6,7 @@ import type {
 } from "@bdr/contracts";
 import {
   assertActiveAdminAuthorization,
+  assertActiveAdministratorGuard,
   authenticationRequired,
   forbidden,
   sessionExpiresAt,
@@ -27,6 +28,7 @@ export type AdminAuthConfig = Readonly<{
 }>;
 
 export interface AdminAuthStore {
+  getActiveAdminCount(): Promise<number | null>;
   getIdentity(issuer: string, sub: string): Promise<AdminIdentity | null>;
   getProfile(adminId: string): Promise<AdminProfile | null>;
   getSession(originJti: string): Promise<AdminSession | null>;
@@ -137,6 +139,7 @@ export class AdminAuthService {
 
   async establish(event: APIGatewayProxyEventV2, requestId: string): Promise<ActiveAdmin> {
     const now = this.now();
+    assertActiveAdministratorGuard(await this.store.getActiveAdminCount());
     const token = verifiedAdminTokenFromEvent(event, this.config, now);
     if (!token.groups.includes("bdr-admins")) forbidden();
     await this.assertCurrentCognitoUser(event, token.sub);
@@ -178,6 +181,7 @@ export class AdminAuthService {
 
   async authenticate(event: APIGatewayProxyEventV2): Promise<ActiveAdmin> {
     const now = this.now();
+    assertActiveAdministratorGuard(await this.store.getActiveAdminCount());
     const token = verifiedAdminTokenFromEvent(event, this.config, now);
     await this.assertCurrentCognitoUser(event, token.sub);
     const session = await this.store.getSession(token.originJti);

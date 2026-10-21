@@ -312,13 +312,12 @@ test.describe("Client Landing Page UI", () => {
         await route.fulfill({ json: { authenticated: true } });
       } else if (path === "/bff/me") {
         await route.fulfill({ json: { organization: { displayName: "BDR Staff" }, admin: true } });
-      } else if (path === "/bff/portal/buildings") {
-        await route.fulfill({
-          json: {
-            items: [adminBuildingA],
-            admin: true,
-          },
-        });
+      } else if (path === "/bff/portal/admin/clients") {
+        await route.fulfill({ json: { items: [{ organizationId: "org_admin_0123456789", displayName: "Org A", clientPrefixes: ["org-a"] }] } });
+      } else if (path.endsWith("/building-count")) {
+        await route.fulfill({ json: { count: 1 } });
+      } else if (path === "/bff/portal/admin/clients/org_admin_0123456789/buildings") {
+        await route.fulfill({ json: { items: [adminBuildingA], admin: true } });
       } else {
         await route.fulfill({ status: 404, json: { error: "not_found" } });
       }
@@ -331,5 +330,7 @@ test.describe("Client Landing Page UI", () => {
     const navigation = page.getByRole("navigation", { name: "Primary navigation" });
     await expect(navigation.getByRole("link", { name: "Clients" })).toHaveAttribute("aria-current", "page");
     await expect(navigation.locator('a[aria-current="page"]')).toHaveCount(1);
+    await page.getByRole("link", { name: /Org A/ }).click();
+    await expect(page.getByRole("heading", { name: "Alpha Tower", exact: true })).toBeVisible();
   });
 });

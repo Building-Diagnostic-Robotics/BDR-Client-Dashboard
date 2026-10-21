@@ -1,5 +1,6 @@
 "use client";
 
+import { administratorInviteResponseSchema, clientAccountInviteResponseSchema } from "@bdr/contracts";
 import { useEffect, useState } from "react";
 
 import { PortalShell } from "../../components/portal-shell";
@@ -80,8 +81,8 @@ function ClientWorkspace({ client, onRenamed }: { client: Client; onRenamed: () 
         <form onSubmit={(event) => {
           event.preventDefault();
           setError(null);
-          void postClient("/bff/portal/client-account", { clientPrefix: client.clientPrefix, email }, asOk)
-            .then(() => { setEmail(""); setMessage("Invite sent. Cognito emailed a temporary password."); loadPeople(); })
+          void postClient("/bff/portal/client-account", { clientPrefix: client.clientPrefix, email }, clientAccountInviteResponseSchema)
+            .then((result) => { setEmail(""); setMessage(result.status === "INVITED" ? "Invite sent. Cognito emailed a temporary password." : result.status === "ALREADY_MEMBER" ? "This account already belongs to this client. No email was sent." : "An invitation is already pending. No new email was sent; use Resend if needed."); loadPeople(); })
             .catch((reason) => {
               const conflict = conflictMessage(reason);
               if (conflict) {
@@ -107,13 +108,11 @@ function ClientWorkspace({ client, onRenamed }: { client: Client; onRenamed: () 
                     .catch(() => setError("The invite could not be resent."));
                 }}>Resend</button>
               ) : null}
-              {user.status !== "REVOKED" ? (
-                <button className="button button--outline" type="button" onClick={() => {
-                  if (!window.confirm(`Revoke ${user.email}?`)) return;
+              <button className="button button--outline" type="button" onClick={() => {
+                  if (!window.confirm(user.status === "REVOKED" ? `Finish revocation cleanup for ${user.email}?` : `Revoke ${user.email}?`)) return;
                   void postClient("/bff/portal/client-revoke", { clientPrefix: client.clientPrefix, email: user.email }, asOk)
-                    .then(loadPeople);
-                }}>Revoke</button>
-              ) : null}
+                    .then(() => { setError(null); setMessage("Access revoked and cleanup completed."); loadPeople(); }).catch((reason) => { loadPeople(); setError(conflictMessage(reason) ?? "Revocation could not be completed. Retry to finish cleanup."); });
+                }}>{user.status === "REVOKED" ? "Retry cleanup" : "Revoke"}</button>
             </li>
           ))}
         </ul>
@@ -124,7 +123,7 @@ function ClientWorkspace({ client, onRenamed }: { client: Client; onRenamed: () 
           setError(null);
           void postClient("/bff/portal/client-email", { clientPrefix: client.clientPrefix, email: current, nextEmail }, asOk)
             .then(() => { setNextEmail(""); form.reset(); setMessage("Email replaced. A temporary password was sent to the new address."); loadPeople(); })
-            .catch(() => setError("The email could not be changed."));
+            .catch((reason) => { loadPeople(); setError(conflictMessage(reason) ?? "The email could not be changed."); });
         }}>
           <label>Current email
             <input name="current" type="email" required />
@@ -208,10 +207,11 @@ export default function AdminToolsPage() {
             const email = String(new FormData(form).get("email") || "");
             setError(null);
             setMessage(null);
-            void postClient("/bff/portal/admins", { email }, asOk)
-              .then(() => {
-                form.reset();
-                setMessage(`Invite sent to ${email}. Cognito emailed a temporary password.`);
+            void postClient("/bff/portal/admins", { email, resend: new FormData(form).get("resend") === "on" }, administratorInviteResponseSchema)
+              .then((result) => {
+                if (result.status === "INVITED") { form.reset(); setMessage(`Invitation sent to ${email}. The email includes the setup link, dashboard sign-in link, and temporary password.`); }
+                else if (result.status === "ALREADY_ADMIN") setMessage(`${email} already has active administrator access. No invitation was sent.`);
+                else setMessage("Onboarding is pending. An invitation was not resent. Select resend only if delivery is uncertain or the invitation expired; unresolved account creation requires operator reconciliation.");
               })
               .catch(() => setError("The admin could not be added."));
           }}>
@@ -220,6 +220,7 @@ export default function AdminToolsPage() {
             <label>Email
               <input name="email" type="email" required placeholder="admin@bdr.com" />
             </label>
+            <label><input type="checkbox" name="resend" /> Explicitly resend an existing administrator invitation</label>
             <button className="button button--primary" type="submit">Send admin invite</button>
           </form>
         </div>

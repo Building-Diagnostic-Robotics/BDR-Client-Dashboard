@@ -10,16 +10,16 @@ import { hash, type SetupClient } from "./sample-dashboard";
 const email = "client@example.com";
 const issuer = "https://cognito-idp.us-east-1.amazonaws.com/client-pool";
 const config: SetupConfiguration = {
-  context: { environment: "production", accountId: "123456789012", region: "us-east-1", bucket: "reports", tenantTable: "tenant", clientPool: "client-pool", clientPrefix: "bdr_sample_dashboard", organizationId: "org_sample", portalOrigin: "https://portal.example.com", operatorArn: "arn:aws:iam::123456789012:user/operator" },
+  context: { environment: "production", accountId: "123456789012", region: "us-east-1", bucket: "reports", tenantTable: "tenant", clientPool: "client-pool", clientPrefix: "bdr_sample_dashboard", organizationId: "org_sample_0123456789abcdef", portalOrigin: "https://portal.example.com", operatorArn: "arn:aws:iam::123456789012:user/operator" },
   identityTable: "identity", sessionTable: "sessions", adminControlTable: "control", auditTable: "audit", adminPool: "admin-pool", issuer,
 };
 const client: SetupClient = {
-  email, original: { username: "old-subject", sub: "old-subject", issuer, organizationId: "org_old", userId: "usr_old", revision: "rev_old", status: "ACTIVE" },
+  email, original: { username: "old-subject", sub: "old-subject", issuer, organizationId: "org_old_0123456789abcdef", userId: "usr_old_0123456789abcdef", revision: "rev_old", status: "ACTIVE" },
   phase: "resetting", username: null, sub: null,
 };
-const oldUser = { ...tenantKeys.user("org_old", "usr_old"), organizationId: "org_old", userId: "usr_old", currentIssuer: issuer, currentSub: "old-subject", normalizedEmail: email, status: "ACTIVE", revision: "rev_old" };
-const oldIdentity = { ...identityKeys.subject(issuer, "old-subject"), issuer, sub: "old-subject", organizationId: "org_old", userId: "usr_old", status: "ACTIVE", invitationId: null };
-const reservation = { ...identityKeys.emailReservation(email), normalizedEmail: email, organizationId: "org_old", userId: "usr_old" };
+const oldUser = { ...tenantKeys.user("org_old_0123456789abcdef", "usr_old_0123456789abcdef"), organizationId: "org_old_0123456789abcdef", userId: "usr_old_0123456789abcdef", currentIssuer: issuer, currentSub: "old-subject", normalizedEmail: email, status: "ACTIVE", revision: "rev_old" };
+const oldIdentity = { ...identityKeys.subject(issuer, "old-subject"), issuer, sub: "old-subject", organizationId: "org_old_0123456789abcdef", userId: "usr_old_0123456789abcdef", status: "ACTIVE", invitationId: null };
+const reservation = { ...identityKeys.emailReservation(email), normalizedEmail: email, organizationId: "org_old_0123456789abcdef", userId: "usr_old_0123456789abcdef" };
 function cognitoUser(sub: string, address = email) { return { Username: sub, Attributes: [{ Name: "email", Value: address }, { Name: "sub", Value: sub }] }; }
 
 beforeEach(() => {
@@ -72,7 +72,7 @@ describe("sample dashboard AWS boundaries", () => {
     await expect(new AwsSampleDashboard(config).inspectClient(email)).resolves.toMatchObject(client.original!);
     vi.mocked(DynamoDBDocumentClient.prototype.send).mockImplementation(async (command) => {
       if (command instanceof GetCommand) return { Item: command.input.Key?.PK === reservation.PK ? reservation : oldIdentity } as never;
-      if (command instanceof ScanCommand) return { Items: [oldUser, { ...oldUser, organizationId: "org_other", userId: "usr_other" }] } as never;
+      if (command instanceof ScanCommand) return { Items: [oldUser, { ...oldUser, organizationId: "org_other_0123456789abcdef", userId: "usr_other_0123456789abcdef" }] } as never;
       throw new Error("Unexpected operation");
     });
     await expect(new AwsSampleDashboard(config).inspectClient(email)).rejects.toThrow("Ambiguous client membership");
@@ -82,7 +82,7 @@ describe("sample dashboard AWS boundaries", () => {
     await new AwsSampleDashboard(config).resetClient(client);
     const transactions = document.mock.calls.flatMap(([command]) => command instanceof TransactWriteCommand ? command.input.TransactItems ?? [] : []);
     expect(transactions).toEqual(expect.arrayContaining([
-      expect.objectContaining({ Update: expect.objectContaining({ TableName: "tenant", Key: tenantKeys.user("org_old", "usr_old"), ConditionExpression: "revision = :expected AND currentSub = :sub AND currentIssuer = :issuer" }) }),
+      expect.objectContaining({ Update: expect.objectContaining({ TableName: "tenant", Key: tenantKeys.user("org_old_0123456789abcdef", "usr_old_0123456789abcdef"), ConditionExpression: "revision = :expected AND currentSub = :sub AND currentIssuer = :issuer" }) }),
       expect.objectContaining({ Delete: expect.objectContaining({ TableName: "identity", Key: identityKeys.emailReservation(email), ConditionExpression: "organizationId = :org AND userId = :user AND normalizedEmail = :email" }) }),
     ]));
     expect(document.mock.calls.filter(([command]) => command instanceof UpdateCommand && command.input.TableName === "sessions")).toHaveLength(2);
@@ -90,7 +90,7 @@ describe("sample dashboard AWS boundaries", () => {
   });
   it("rejects a foreign reservation before disabling or deleting an account", async () => {
     const { cognito, document } = mockAccounts();
-    document.mockImplementation(async (command) => command instanceof GetCommand ? { Item: { ...reservation, organizationId: "org_other" } } as never : {} as never);
+    document.mockImplementation(async (command) => command instanceof GetCommand ? { Item: { ...reservation, organizationId: "org_other_0123456789abcdef" } } as never : {} as never);
     await expect(new AwsSampleDashboard(config).resetClient(client)).rejects.toThrow("reservation ownership");
     expect(cognito.mock.calls.some(([command]) => command instanceof AdminDisableUserCommand || command instanceof AdminDeleteUserCommand)).toBe(false);
   });
@@ -111,16 +111,16 @@ describe("sample dashboard AWS boundaries", () => {
     expect(request?.input).toEqual({ UserPoolId: "client-pool", Username: email, DesiredDeliveryMediums: ["EMAIL"], UserAttributes: [{ Name: "email", Value: email }, { Name: "email_verified", Value: "true" }] });
   });
   it("verifies newly mapped users before accepting a completed checkpoint", async () => {
-    const newUserId = `usr${hash("org_sample:client@example.com")}`.slice(0, 32);
+    const newUserId = `usr${hash("org_sample_0123456789abcdef:client@example.com")}`.slice(0, 32);
     vi.spyOn(CognitoIdentityProviderClient.prototype, "send").mockImplementation(async (command) => {
       if (command instanceof ListUsersCommand) return { Users: command.input.UserPoolId === "admin-pool" ? [] : [cognitoUser("new-subject")] } as never;
       if (command instanceof AdminGetUserCommand) return { Enabled: true, UserStatus: "FORCE_CHANGE_PASSWORD" } as never;
       throw new Error("Unexpected operation");
     });
     vi.spyOn(DynamoDBDocumentClient.prototype, "send").mockImplementation(async (command) => {
-      const mapped = { ...oldIdentity, sub: "new-subject", organizationId: "org_sample", userId: newUserId };
-      if (command instanceof GetCommand) return { Item: String(command.input.Key?.PK).startsWith("EMAIL#") ? { ...reservation, organizationId: "org_sample", userId: newUserId } : mapped } as never;
-      if (command instanceof ScanCommand) return { Items: [{ ...oldUser, PK: "ORG#org_sample", SK: `USER#${newUserId}`, currentSub: "new-subject", organizationId: "org_sample", userId: newUserId }] } as never;
+      const mapped = { ...oldIdentity, sub: "new-subject", organizationId: "org_sample_0123456789abcdef", userId: newUserId };
+      if (command instanceof GetCommand) return { Item: String(command.input.Key?.PK).startsWith("EMAIL#") ? { ...reservation, organizationId: "org_sample_0123456789abcdef", userId: newUserId } : mapped } as never;
+      if (command instanceof ScanCommand) return { Items: [{ ...oldUser, PK: "ORG#org_sample_0123456789abcdef", SK: `USER#${newUserId}`, currentSub: "new-subject", organizationId: "org_sample_0123456789abcdef", userId: newUserId }] } as never;
       throw new Error("Unexpected operation");
     });
     await expect(new AwsSampleDashboard(config).verifyClient({ ...client, phase: "done", sub: "new-subject", username: "new-subject" })).resolves.toBeUndefined();

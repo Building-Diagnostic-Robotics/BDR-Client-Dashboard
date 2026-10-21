@@ -54,8 +54,8 @@ function cookie(name: string): string | null {
   return null;
 }
 
-export function getClient<T>(path: string, schema: Schema<T>): Promise<T> {
-  return request(path, schema);
+export function getClient<T>(path: string, schema: Schema<T>, signal?: AbortSignal): Promise<T> {
+  return request(path, schema, signal ? { signal } : undefined);
 }
 
 export function postClient<T>(path: string, body: unknown, schema: Schema<T>): Promise<T> {

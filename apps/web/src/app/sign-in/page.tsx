@@ -1,11 +1,13 @@
 "use client";
 
+import { passwordLoginResponseSchema } from "@bdr/contracts";
 import { useSearchParams } from "next/navigation";
 import { FormEvent, Suspense, useEffect, useMemo, useState } from "react";
 
 type Screen =
   | "credentials"
   | "temporary-password"
+  | "admin-setup"
   | "mfa"
   | "forgot-request"
   | "forgot-confirm";
@@ -128,6 +130,7 @@ function SignInForm() {
   const rawReturnTo = params.get("returnTo") || "/projects";
   const returnTo = rawReturnTo.startsWith("/") && !rawReturnTo.startsWith("//") ? rawReturnTo : "/projects";
 
+  const [adminSetupPath, setAdminSetupPath] = useState("/bff/auth/admin/login?returnTo=%2Fprojects");
   const [screen, setScreen] = useState<Screen>("credentials");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -158,6 +161,17 @@ function SignInForm() {
 
   const passwordsMatch = newPassword.length > 0 && newPassword === confirmPassword;
 
+  function showAdministratorSetup(value: unknown): boolean {
+    const parsed = passwordLoginResponseSchema.safeParse(value);
+    if (!parsed.success || !("setupRequired" in parsed.data)) return false;
+    const target = new URL(parsed.data.setupPath, window.location.origin);
+    if (target.origin !== window.location.origin || target.pathname !== "/bff/auth/admin/login") throw new Error("Invalid setup link");
+    setAdminSetupPath(`${target.pathname}${target.search}`);
+    setPassword(""); setNewPassword(""); setConfirmPassword(""); setMfaCode(""); setMfaSession(null);
+    setScreen("admin-setup");
+    return true;
+  }
+
   async function handleCredentialsSubmit(event: FormEvent) {
     event.preventDefault();
     setPending(true);
@@ -182,6 +196,8 @@ function SignInForm() {
         session?: string;
         error?: string;
       };
+
+      if (response.ok && showAdministratorSetup(body)) return;
 
       if (response.ok && body.mfa && body.session) {
         setMfaSession(body.session);
@@ -239,6 +255,8 @@ function SignInForm() {
         error?: string;
       };
 
+      if (response.ok && showAdministratorSetup(body)) return;
+
       if (response.ok && body.mfa && body.session) {
         setMfaSession(body.session);
         setNewPassword("");
@@ -285,6 +303,8 @@ function SignInForm() {
         returnTo?: string;
         error?: string;
       };
+
+      if (response.ok && showAdministratorSetup(body)) return;
 
       if (!response.ok || !body.returnTo) {
         setError("Invalid authenticator code. Please try again.");
@@ -481,6 +501,19 @@ function SignInForm() {
                 </button>
               </div>
             </form>
+          </div>
+        )}
+
+        {screen === "admin-setup" && (
+          <div className="login-card__body">
+            <div className="login-card__title-group">
+              <h1>Set up administrator access</h1>
+              <p className="login-card__subtitle">Continue to Cognito to set your password and enroll your authenticator app. Afterwards, use this sign-in page as usual.</p>
+            </div>
+            <div className="login-actions">
+              <a className="button button--primary" href={adminSetupPath}>Continue to secure setup</a>
+              <button className="button button--outline" type="button" onClick={handleBackToSignIn}>Back to sign in</button>
+            </div>
           </div>
         )}
 

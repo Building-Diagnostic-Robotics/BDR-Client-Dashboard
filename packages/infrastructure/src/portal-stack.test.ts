@@ -353,3 +353,21 @@ describe("portal infrastructure", () => {
     );
   });
 });
+
+it("keeps admin enrollment invite-only with both dashboard links and required TOTP", () => {
+  const rendered = template();
+  rendered.hasResourceProperties("AWS::Cognito::UserPool", Match.objectLike({
+    UserPoolName: Match.stringLikeRegexp(".*-admins$"), MfaConfiguration: "ON", EnabledMfas: ["SOFTWARE_TOKEN_MFA"],
+    AdminCreateUserConfig: Match.objectLike({ AllowAdminCreateUserOnly: true, InviteMessageTemplate: Match.objectLike({
+      EmailSubject: "Your BDR Dashboard administrator invitation", EmailMessage: Match.stringLikeRegexp("/bff/auth/admin/login"),
+    }) }),
+  }));
+  const pools = rendered.findResources("AWS::Cognito::UserPool");
+  const admin = Object.values(pools).find((item) => item.Properties?.UserPoolName?.endsWith("-admins"));
+  expect(admin?.Properties?.AdminCreateUserConfig.InviteMessageTemplate.EmailMessage).toContain("http://localhost:3000/sign-in");
+  expect(admin?.Properties?.AdminCreateUserConfig.InviteMessageTemplate.EmailMessage).toContain("{username}");
+  expect(admin?.Properties?.AdminCreateUserConfig.InviteMessageTemplate.EmailMessage).toContain("{####}");
+  rendered.hasResourceProperties("AWS::Cognito::UserPoolClient", Match.objectLike({
+    ClientName: Match.stringLikeRegexp(".*-admin-web$"), AllowedOAuthScopes: ["openid", "email", "aws.cognito.signin.user.admin"],
+  }));
+});

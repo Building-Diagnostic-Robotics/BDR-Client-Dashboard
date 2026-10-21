@@ -1,3 +1,4 @@
+import { CognitoIdentityProviderClient, GetUserCommand } from "@aws-sdk/client-cognito-identity-provider";
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 
 import type { ClientOAuth, ClientTokenSet, VerifiedClientTokens } from "./client";
@@ -23,7 +24,7 @@ export class AdminPoolOAuth implements ClientOAuth {
     url.search = new URLSearchParams({
       client_id: this.config.clientId,
       response_type: "code",
-      scope: "openid email",
+      scope: "openid email aws.cognito.signin.user.admin",
       redirect_uri: this.config.callbackUrl,
       state: input.state,
       nonce: input.nonce,
@@ -92,10 +93,6 @@ export class AdminPoolOAuth implements ClientOAuth {
     if (id.token_use !== "id" || id.nonce !== nonce || id.sub !== access.sub) {
       throw new Error("Cognito ID token claims are invalid");
     }
-    const memberOf = new Set([...groups(access.payload), ...groups(id)]);
-    if (!memberOf.has("bdr-admins")) {
-      console.warn(JSON.stringify({ error: "admin_group_claim_missing", claims: [...memberOf] }));
-    }
     return { issuer: access.issuer, sub: access.sub, accessTokenExpiresAt: access.accessTokenExpiresAt };
   }
 
@@ -121,6 +118,10 @@ export class AdminPoolOAuth implements ClientOAuth {
     ) {
       throw new Error("Cognito access token claims are invalid");
     }
+    if (!groups(payload).includes("bdr-admins")) throw new Error("Administrator group required");
+    const user = await new CognitoIdentityProviderClient({}).send(new GetUserCommand({ AccessToken: token }));
+    if (user.UserAttributes?.find((attribute) => attribute.Name === "sub")?.Value !== payload.sub
+      || !user.UserMFASettingList?.includes("SOFTWARE_TOKEN_MFA")) throw new Error("Administrator TOTP setup required");
     return {
       issuer: payload.iss,
       sub: payload.sub,
