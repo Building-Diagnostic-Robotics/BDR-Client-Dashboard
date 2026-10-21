@@ -45,8 +45,18 @@ jobs:
       - name: Build all workspaces
         run: npm run build
 
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium webkit
+        run: |
+          for i in 1 2 3; do
+            npx playwright install --with-deps chromium webkit && break || (echo "Retrying Playwright install in 5s (attempt $i)..." && sleep 5)
+          done
 
       - name: Run local Playwright E2E suite
         run: npm run test:e2e
