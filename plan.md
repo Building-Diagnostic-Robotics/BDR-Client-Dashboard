@@ -32,20 +32,27 @@ Key shared-portal architecture rules:
 - **Organization How to Read Restoration:** Landing page banner on `/projects` and session-derived download endpoints.
 - **Validation Baselines:** Strict TypeScript compiler errors in `@bdr/services` resolved and Playwright browser fixtures updated.
 
-### Planned Security Fixes (In Progress — Not Yet Complete)
-1. **Client Revocation Session Invalidation:** Update `revokeClientUser` to invalidate active sessions in `SESSION_TABLE_NAME` and set `status = "REVOKED"` on matching `SUBJECT#` records in `IDENTITY_TABLE_NAME`.
-2. **Canonical Administrator Provisioning & Authorization:** Synchronize `POST /bff/portal/admins` with DynamoDB `AdminProfile` creation, `ADMIN_GUARD` `ACTIVE_COUNT` incrementing, and audit logging to prevent CLI/API lockout and maintain last-administrator guards.
-3. **Administrator MFA Onboarding Flow:** Handle multi-step MFA challenge transitions following temporary password replacement (`NEW_PASSWORD_REQUIRED`) in `passwordLogin` to eliminate administrator onboarding failures.
+### Completed Security Fixes
+
+Implemented in `74d363e`. Development and production authentication reconciliation was performed; the operator reported a clean production audit, successful client/admin sign-in, and a passing production authentication suite.
+
+1. **Client revocation:** Identity and membership denial precede paginated session cleanup and Cognito revocation, with retryable cleanup and audit records.
+2. **Canonical administrators:** Portal invitations and activation use immutable administrator mappings, active `BDR_ADMIN` profiles, verified TOTP/group membership, conditional guard updates, and audit events. Existing administrator IDs are preserved.
+3. **MFA onboarding:** New administrators use the trusted Cognito hosted setup route for temporary-password replacement and TOTP enrollment. Regular sign-in checks completed enrollment and canonical authorization.
+
+### Administrator Loading and Review Changes (Implementation — Validation Pending)
+
+- Linked active client cards load from a lightweight directory; building counts load separately (two concurrent browser requests), and opening a client fetches only that organization's catalog.
+- Review uses current status-only reads across all inspections, bounded workers and a shared four-read IO limit. Partial failures remain visible and cannot appear as a clear queue.
+- S3 prefix discovery and tenant catalog queries follow continuation keys. Administrator read responses use shared contracts and request-local performance counters.
+- No deployment or new validation run accompanies this implementation. See [administrator performance rollout](docs/runbooks/admin-performance.md).
 
 ### Deliberately Deferred Work
 - **ReportGen Cross-Writer Ownership Split:** Splitting shared S3 state into writer-owned files (`reportgen_status.json` owned by ReportGen and `portal_state.json` owned by the dashboard) is deferred pending coordinated ReportGen changes.
 - **Shared Dev/Prod Bucket Isolation:** Both development and production CDK stacks currently share `DATA_BUCKET_NAME` (`bdr-roofus-uploads`). Parameterizing this bucket is deferred pending coordination with the ReportGen owner; until resolved, development mutations must be treated as production-impacting.
 - **Client Notification Emails:** SES outbound emails remain blocked pending verified sending domain identity; notifications stay queued on `pendingAdminEmail`.
-- **Administrator Review Queue N+1 Optimization:** Sequential fetching of building statuses in `/review` deferred.
 - **ReportGen Internal Administration UI:** Porting admin features into ReportGen deferred; the CLI and dashboard admin tools remain the active administrative paths.
 - **Remaining UI Polish:** Typography, spacing, and responsive design adjustments across dashboard cards and views.
-- **S3 Pagination for High-Scale Folders:** Looping continuation tokens in `listChildren` deferred until folder counts exceed 1,000.
-- **Shared Contract Migration for Review Page:** Migrating local type parsers in `/review` to `@bdr/contracts` deferred.
 
 ## Operations and Environment Boundary
 

@@ -89,10 +89,13 @@ Dashboard writes to `org_links.json` and building `status.json` enforce S3 ETags
 
 Client authentication uses Cognito with authorization-code flow or direct password login. The Client BFF stores Cognito tokens server-side and gives the browser only a host-only, secure, HttpOnly opaque session cookie. Every request checks the server-side session, user status, and organization status.
 
-Sign-ins enforce one-email-one-pool across client and administrator pools, resolving client accounts first. Three security hardening fixes are currently planned:
-1. **Client Revocation:** Invalidate active sessions in `SESSION_TABLE_NAME` and update `SUBJECT#` records in `IDENTITY_TABLE_NAME` upon client user revocation.
-2. **Canonical Administrator Provisioning:** Synchronize BFF admin creation with DynamoDB `AdminProfile` creation, `ADMIN_GUARD` count incrementing, and audit logging to maintain CLI/Admin API operational integrity.
-3. **Administrator MFA Onboarding:** Handle multi-step challenge transitions (`MFA_SETUP` / `SOFTWARE_TOKEN_MFA`) following temporary password replacement (`NEW_PASSWORD_REQUIRED`) in `passwordLogin` to eliminate onboarding failures.
+Sign-ins enforce one-email-one-pool across client and administrator pools, resolving client accounts first. Security hardening in `74d363e` includes:
+
+1. **Client revocation:** Identity and membership denial precede paginated session cleanup and Cognito revocation, with retryable cleanup and audit records.
+2. **Canonical administrators:** Portal invitations and activation use immutable administrator mappings, active `BDR_ADMIN` profiles, verified TOTP/group membership, conditional guard updates, and audit events. Existing administrator IDs are preserved.
+3. **MFA onboarding:** New administrators use the trusted Cognito hosted setup route for temporary-password replacement and TOTP enrollment. Regular sign-in checks completed enrollment and canonical authorization.
+
+Administrator browsing has separate linked-client directory, per-client catalog/count, and all-inspection review reads. Current source status remains authoritative; incomplete review reads are reported explicitly. Shared read concurrency and discovery pagination bound request work without introducing a publication cache.
 
 The current administration paths:
 - The local `portal-admin` CLI signs in through the Portal Admin Cognito pool with TOTP, calling the Portal Admin API.

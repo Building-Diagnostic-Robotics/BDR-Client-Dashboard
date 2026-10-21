@@ -10,6 +10,8 @@ import {
   type TransactWriteCommandInput,
 } from "@aws-sdk/lib-dynamodb";
 import type {
+  PortalAdminClient,
+  PortalAdminBuildingSummary,
   PortalBuildingDetail,
   PortalBuildingSummary,
   PortalInspection,
@@ -40,6 +42,7 @@ import {
   type PortalBuilding,
   type PortalSourceInspection,
 } from "./buildings";
+import { mapConcurrent, type PortalReadContext } from "./read-context";
 import { reportDownloadFilename } from "./artifact-filenames";
 
 const REPORT_ORDER: readonly PortalReportType[] = [
@@ -163,7 +166,7 @@ function sourceClaimHash(prefix: string): string {
   return sha256(prefix.replace(/^\/+|\/+$/g, ""));
 }
 
-async function sourceClaims(prefixes: readonly string[]): Promise<Map<string, Record<string, unknown>>> {
+export async function sourceClaims(prefixes: readonly string[], context?: PortalReadContext): Promise<Map<string, Record<string, unknown>>> {
   const unique = [...new Set(prefixes.map(sourceClaimHash))];
   const claims = new Map<string, Record<string, unknown>>();
   const tableName = table();
@@ -172,11 +175,13 @@ async function sourceClaims(prefixes: readonly string[]): Promise<Map<string, Re
       .slice(offset, offset + 100)
       .map((hash) => ({ ...tenantKeys.portalSource(hash) }));
     for (let attempt = 0; keys.length > 0 && attempt < 4; attempt += 1) {
-      const result = await document.send(new BatchGetCommand({
+      const read = () => document.send(new BatchGetCommand({
         RequestItems: {
           [tableName]: { Keys: keys, ConsistentRead: true },
         },
       }));
+      if (context) context.dynamoReadCount++;
+      const result = await (context ? context.run(read) : read());
       for (const item of result.Responses?.[tableName] ?? []) {
         if (typeof item.PK === "string") claims.set(item.PK, item);
       }
@@ -259,17 +264,33 @@ function provisionalItem(organizationId: string, row: PortalBuilding, source: Po
   };
 }
 
-async function storedRows(organizationId: string): Promise<Array<Record<string, unknown>>> {
-  const result = await document.send(new QueryCommand({
-    TableName: table(),
-    KeyConditionExpression: "PK = :pk AND begins_with(SK, :prefix)",
-    ExpressionAttributeValues: {
-      ":pk": `ORG#${organizationId}`,
-      ":prefix": "PORTAL_",
-    },
-    ConsistentRead: true,
-  }));
-  return result.Items ?? [];
+async function storedRows(organizationId: string, context?: PortalReadContext): Promise<Array<Record<string, unknown>>> {
+  const rows: Array<Record<string, unknown>> = []; let key: Record<string, unknown> | undefined;
+  const seen = new Set<string>();
+  do {
+    const read = () => document.send(new QueryCommand({ TableName: table(),
+      KeyConditionExpression: "PK = :pk AND begins_with(SK, :prefix)",
+      ExpressionAttributeValues: { ":pk": `ORG#${organizationId}`, ":prefix": "PORTAL_" },
+      ConsistentRead: true, ...(key ? { ExclusiveStartKey: key } : {}) }));
+    if (context) context.dynamoReadCount++;
+    const result = await (context ? context.run(read) : read());
+    rows.push(...result.Items ?? []); key = result.LastEvaluatedKey;
+    if (key) { const token = JSON.stringify(key); if (seen.has(token)) throw new Error("portal_catalog_pagination_incomplete"); seen.add(token); }
+  } while (key);
+  return rows;
+}
+
+export async function storedPortalInspectionSources(organizationId: string, context: PortalReadContext): Promise<Array<{ prefix: string; name: string }>> {
+  const rows = await storedRows(organizationId, context);
+  const sources: Array<{ prefix: string; name: string }> = [];
+  for (const row of rows.filter((item) => item.entityType === "PORTAL_BUILDING")) {
+    if (!isStoredBuilding(row) || row.organizationId !== organizationId || typeof row.displayName !== "string") throw new Error("portal_catalog_owner_invalid");
+    for (const inspection of row.inspections) {
+      if (typeof inspection.sourcePrefix !== "string") throw new Error("portal_inspection_source_invalid");
+      sources.push({ prefix: inspection.sourcePrefix, name: row.displayName });
+    }
+  }
+  return sources;
 }
 
 function isStoredBuilding(value: Record<string, unknown>): value is StoredBuilding {
@@ -342,8 +363,8 @@ function publishedArtifact(
   return { key, filename: reportDownloadFilename(building.displayName, type), contentType: "application/pdf" };
 }
 
-async function reportView(inspection: StoredInspection, building: StoredBuilding): Promise<{ reports: PortalReport[]; artifacts: Map<PortalReportType, ResolvedArtifact> }> {
-  const status = await loadPortalStatus(inspection.sourcePrefix);
+async function reportView(inspection: StoredInspection, building: StoredBuilding, context?: PortalReadContext): Promise<{ reports: PortalReport[]; artifacts: Map<PortalReportType, ResolvedArtifact> }> {
+  const status = context ? await loadPortalReportStatus(inspection.sourcePrefix, context) : await loadPortalStatus(inspection.sourcePrefix);
   const sourceReports = status.reports && typeof status.reports === "object"
     ? status.reports as Record<string, Record<string, unknown>>
     : {};
@@ -384,8 +405,8 @@ async function reportView(inspection: StoredInspection, building: StoredBuilding
   return { reports, artifacts };
 }
 
-async function inspectionView(inspection: StoredInspection, building: StoredBuilding): Promise<PortalInspection> {
-  const { reports } = await reportView(inspection, building);
+async function inspectionView(inspection: StoredInspection, building: StoredBuilding, context?: PortalReadContext): Promise<PortalInspection> {
+  const { reports } = await reportView(inspection, building, context);
   const available = reports.filter((report) => report.deliveryStatus === "AVAILABLE");
   const dates = available.map((report) => report.publishedAt).filter((value): value is string => Boolean(value)).sort();
   return {
@@ -437,9 +458,10 @@ async function detailFromResolved(resolved: ResolvedBuilding): Promise<PortalBui
 async function storedSummary(
   item: StoredBuilding,
   includeHidden: boolean,
+  context?: PortalReadContext,
 ): Promise<PortalBuildingSummary | null> {
   const ordered = sortInspections(item.inspections);
-  const latest = ordered[0] ? await inspectionView(ordered[0], item) : null;
+  const latest = ordered[0] ? await inspectionView(ordered[0], item, context) : null;
   let visible = includeHidden
     || item.clientVisible
     || Boolean(latest?.availableReportTypes.length);
@@ -472,21 +494,31 @@ async function storedSummary(
   };
 }
 
-async function portalCatalogState(organizationId: string, includeHidden = false): Promise<{
+async function portalCatalogState(organizationId: string, includeHidden = false, context?: PortalReadContext, clientPrefixes?: readonly string[]): Promise<{
   items: PortalBuildingSummary[];
   sourcePrefixes: Map<string, string>;
 }> {
-  const rows = await storedRows(organizationId);
+  const rows = await storedRows(organizationId, context);
   const buildings = rows.filter(isStoredBuilding);
+  if (context && clientPrefixes) {
+    if (rows.some((row) => row.entityType === "PORTAL_BUILDING" && !isStoredBuilding(row))) throw new Error("portal_catalog_building_invalid");
+    for (const building of buildings) {
+      if (building.organizationId !== organizationId) throw new Error("portal_catalog_owner_invalid");
+      for (const inspection of building.inspections) {
+        const parts = typeof inspection.sourcePrefix === "string" ? inspection.sourcePrefix.replace(/\/$/, "").split("/") : [];
+        if (parts.length !== 4 || !clientPrefixes.includes(parts[0]!) || parts.some((part) => !part || part === "." || part === "..")) throw new Error("portal_catalog_source_owner_invalid");
+      }
+    }
+  }
   const claimedSources = new Set(buildings.flatMap((building) => (
     building.inspections.map((inspection) => inspection.sourceId)
   )));
-  const explicit = (await Promise.all(buildings.map((item) => storedSummary(item, includeHidden))))
+  const explicit = (await mapConcurrent(buildings, 4, (item) => storedSummary(item, includeHidden, context)))
     .filter((item): item is PortalBuildingSummary => item !== null);
-  const prefixes = includeHidden ? await linkedPrefixesForOrganization(organizationId) : undefined;
-  const legacy = await listPortalBuildings(organizationId, includeHidden, prefixes);
+  const prefixes = clientPrefixes ?? (includeHidden ? await linkedPrefixesForOrganization(organizationId) : undefined);
+  const legacy = await listPortalBuildings(organizationId, includeHidden, prefixes, context);
   const provisionalRows = legacy.filter((row) => !claimedSources.has(portalSourceId(row.buildingPrefix)));
-  const globalClaims = await sourceClaims(provisionalRows.map((row) => row.buildingPrefix));
+  const globalClaims = await sourceClaims(provisionalRows.map((row) => row.buildingPrefix), context);
   const provisional = provisionalRows
     .filter((row) => !globalClaims.has(tenantKeys.portalSource(sourceClaimHash(row.buildingPrefix)).PK))
     .map((row): PortalBuildingSummary => ({
@@ -524,6 +556,16 @@ async function portalCatalogState(organizationId: string, includeHidden = false)
 
 export async function listPortalCatalogBuildings(organizationId: string): Promise<PortalBuildingSummary[]> {
   return (await portalCatalogState(organizationId)).items;
+}
+
+export async function portalAdminCatalogBuildingsFor(client: PortalAdminClient, context: PortalReadContext): Promise<PortalAdminBuildingSummary[]> {
+  const catalog = await portalCatalogState(client.organizationId, true, context, client.clientPrefixes);
+  return catalog.items.map((building) => ({ ...building,
+    buildingPrefix: catalog.sourcePrefixes.get(building.buildingId) ?? `${client.clientPrefixes[0]}/`,
+    scanTime: building.latestInspection?.scannedAt ?? null, uploadTime: building.latestInspection?.uploadCompletedAt ?? null,
+    timeZone: building.latestInspection?.timeZone ?? null, readyReports: building.latestInspection?.availableReportTypes ?? [],
+    latestReportUpdate: building.latestInspection?.latestReportUpdate ?? null,
+  }));
 }
 
 export async function listPortalAdminCatalogBuildings(): Promise<Array<PortalBuildingSummary & {

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ClientIdentity, ClientSession } from "@bdr/contracts";
 import { DomainError, sha256 } from "@bdr/domain";
@@ -7,6 +7,7 @@ import type { APIGatewayProxyEventV2 } from "aws-lambda";
 import { passwordLogin } from "./auth/password-login";
 import { createClientBffHandler } from "./client-bff";
 import { currentHowToReadForOrg, signedArtifactRead, signedReadWithDisposition } from "./portal/buildings";
+import { adminClients, adminClientBuildings, adminClientBuildingCount, adminReview } from "./portal/admin-reads";
 import { resolvePortalArtifact } from "./portal/catalog";
 
 vi.mock("./auth/password-login", async (importOriginal) => {
@@ -28,6 +29,10 @@ vi.mock("./portal/catalog", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./portal/catalog")>();
   return { ...actual, resolvePortalArtifact: vi.fn() };
 });
+
+vi.mock("./portal/admin-reads", () => ({
+  adminClients: vi.fn(), adminClientBuildings: vi.fn(), adminClientBuildingCount: vi.fn(), adminReview: vi.fn(),
+}));
 
 const csrf = "csrf-token";
 const identity: ClientIdentity = {
@@ -551,4 +556,38 @@ it("offers hosted administrator setup without establishing cookies or a dashboar
   expect(JSON.parse(response.body!)).toEqual({ setupRequired: true, setupPath: "/bff/auth/admin/login?returnTo=%2F" });
   expect(response.cookies ?? []).toHaveLength(0);
   expect(operations.establishVerifiedSession).not.toHaveBeenCalled();
+});
+
+
+describe("administrator directory and review read routes", () => {
+  beforeEach(() => vi.clearAllMocks());
+  const adminIssuer = "https://issuer.example.com/admin-pool";
+  const organizationId = "org_selected_0123456789";
+  function handlerFor(issuer: string) {
+    const resources = { policy: { loadActiveClientContext: vi.fn(async () => ({ issuer, sub: identity.sub, userId: identity.userId,
+      organization: { organizationId: identity.organizationId, displayName: "Dashboard", status: "ACTIVE" } })) } } as never;
+    return createClientBffHandler({ portalOrigin: "https://portal.example.com", service: service(), resources, adminIssuer });
+  }
+  it.each([
+    "/bff/portal/admin/clients", "/bff/portal/admin/review",
+    `/bff/portal/admin/clients/${organizationId}/buildings`, `/bff/portal/admin/clients/${organizationId}/building-count`,
+  ])("rejects client sessions before reading administrator data: %s", async (path) => {
+    const result = await handlerFor(identity.issuer)(event("GET", path));
+    expect(result.statusCode).toBe(403);
+    for (const read of [adminClients, adminReview, adminClientBuildings, adminClientBuildingCount]) expect(read).not.toHaveBeenCalled();
+  });
+  it("routes verified administrator reads and forwards only validated organization IDs", async () => {
+    vi.mocked(adminClients).mockResolvedValue({ items: [] });
+    vi.mocked(adminReview).mockResolvedValue({ items: [], complete: true, failures: [] });
+    vi.mocked(adminClientBuildings).mockResolvedValue({ items: [], admin: true });
+    vi.mocked(adminClientBuildingCount).mockResolvedValue({ count: 0 });
+    const handler = handlerFor(adminIssuer);
+    for (const path of ["/bff/portal/admin/clients", "/bff/portal/admin/review", `/bff/portal/admin/clients/${organizationId}/buildings`, `/bff/portal/admin/clients/${organizationId}/building-count`]) {
+      expect((await handler(event("GET", path))).statusCode).toBe(200);
+    }
+    expect(adminClientBuildings).toHaveBeenCalledWith(organizationId, "request");
+    expect(adminClientBuildingCount).toHaveBeenCalledWith(organizationId, "request");
+    expect((await handler(event("GET", "/bff/portal/admin/clients/invalid/buildings"))).statusCode).toBe(400);
+    expect(adminClientBuildings).toHaveBeenCalledTimes(1);
+  });
 });

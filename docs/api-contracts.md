@@ -91,3 +91,18 @@ The Portal Admin API (`/admin/*`) is consumed by the `portal-admin` CLI. Callers
 - State mutation endpoints require `expectedRevision`. Conflicts return HTTP 409; callers must reload current data before retrying.
 - Client-visible report versions are immutable. Replacement creates a new version; published objects are never overwritten.
 - S3 conditional writes on shared JSON files use `If-Match: <etag>` and `If-None-Match: *`.
+
+## Administrator directory and review reads
+
+All routes below require an authenticated canonical portal administrator; client sessions receive `403`. The server resolves active organizations and linked prefixes independently of browser input. Existing client and Organization tools routes retain their response shapes.
+
+| Route | Response |
+| --- | --- |
+| `GET /bff/portal/admin/clients` | `{ items }`: one entry per active linked organization with `organizationId`, `displayName`, and `clientPrefixes`. No building discovery or counts. |
+| `GET /bff/portal/admin/clients/:organizationId/buildings` | `{ items, admin: true }`: existing administrator building summaries for that organization only. |
+| `GET /bff/portal/admin/clients/:organizationId/building-count` | `{ count }`: the same catalog’s physical-building count, including grouped inspections and source claims. |
+| `GET /bff/portal/admin/review` | `{ items, complete, failures }`: pending reports across all linked inspections; failures identify `organizationId`, `clientName`, and nullable source `prefix`. |
+
+Review rows include `organizationId`, `clientName`, `prefix`, building `name`, canonical `reportType`, original `reportKey`, nullable `artifactKey`, and nullable `generatedAt`. `CAPITAL_PLAN` remains the mutation key when present in source state, while its display type is `CAPITAL_PLANNING`. The shared schema requires those two representations to agree. View signs the selected artifact on demand through the existing administrator file endpoint. Approve/notes use the existing CSRF-protected mutation endpoint and original report key.
+
+A complete review response must have no failures. Incomplete responses retain safely loaded rows and require explicit warning/retry; an initial directory/configuration error fails the request. Unknown, inactive or unlinked organization selectors cannot select another catalog. Schemas and inferred types live in `packages/contracts/src/portal.ts`.

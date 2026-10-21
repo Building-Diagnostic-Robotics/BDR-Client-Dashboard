@@ -51,11 +51,13 @@ The browser receives a host-only `HttpOnly` session cookie and a CSRF cookie. Mu
 
 A session lasts at most 8 hours (`SESSION_LIFETIME_MS` in `src/auth/client.ts`) with a 30-minute inactivity timeout (`CLIENT_INACTIVITY_TIMEOUT_MS` in `packages/domain/src/sessions.ts`). A successful request more than 5 minutes after the last activity extends the idle deadline without extending the 8-hour maximum.
 
-### Security Fixes in Progress
-Three planned security remediations are in progress:
-1. **Client Revocation:** Invalidate sessions in `SESSION_TABLE_NAME` and update `SUBJECT#` records in `IDENTITY_TABLE_NAME` upon `revokeClientUser`.
-2. **Canonical Admin Provisioning:** Synchronize `POST /bff/portal/admins` with DynamoDB `AdminProfile` creation, `ADMIN_GUARD` `ACTIVE_COUNT` increments, and audit logging.
-3. **Admin MFA Onboarding Flow:** Handle multi-step challenge transitions (`MFA_SETUP` / `SOFTWARE_TOKEN_MFA`) following `NEW_PASSWORD_REQUIRED` in `passwordLogin` to eliminate onboarding failures.
+### Completed Security Hardening
+
+Implemented in `74d363e`; compatibility records have been reconciled in both environments and the operator reported successful production authentication checks.
+
+1. **Client revocation:** Identity and membership denial precede paginated session cleanup and Cognito revocation, with retryable cleanup and audit records.
+2. **Canonical administrators:** Portal invitations and activation use immutable administrator mappings, active `BDR_ADMIN` profiles, verified TOTP/group membership, conditional guard updates, and audit events. Existing administrator IDs are preserved.
+3. **MFA onboarding:** New administrators use the trusted Cognito hosted setup route for temporary-password replacement and TOTP enrollment. Regular sign-in checks completed enrollment and canonical authorization.
 
 ## Building Portal Routes
 
@@ -98,3 +100,12 @@ npm run test --workspace @bdr/services
 ```
 
 Handler tests sit next to the modules (`client-bff.test.ts`, `admin-api.test.ts`, `publisher.test.ts`, `src/portal/catalog.test.ts`, `src/portal/buildings.test.ts`, and suites under `src/auth`). Contract changes belong in `packages/contracts` and should be updated in the same change as the handler.
+
+### Administrator read performance
+
+The administrator Clients page uses `src/portal/admin-reads.ts`: directory reads load organization links and verify active tenant records without building discovery. Counts and selected-client buildings use the same per-organization physical catalog rules. These reads are separate from the existing `/bff/portal/clients` Organization tools endpoint, whose wire format is unchanged.
+
+Review reads lean current `status.json` objects for all stored/discovered inspections under linked active organizations, deduplicates sources, checks source claims, and returns explicit completeness/failure information. It does not load full building details, image metadata, report history, or presigned URLs. Eligible rows remain awaiting approval, non-stale, and not client-visible. Failures are never treated as an empty queue.
+
+Administrator workers and shared IO are capped at four per request. S3 prefix discovery follows continuation tokens; stored catalog queries follow DynamoDB continuation keys. `portal_admin_read` logs operation, request ID, outcome (`success`, `partial`, `error`), duration, S3 GET/LIST counts, DynamoDB reads, and failed reads. There is no persistent cache or new infrastructure. See [rollout and validation](runbooks/admin-performance.md).
+

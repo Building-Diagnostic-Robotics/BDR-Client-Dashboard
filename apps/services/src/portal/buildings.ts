@@ -14,7 +14,8 @@ import {
   S3Client,
 } from "@aws-sdk/client-s3";
 import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
-import { opaqueIdSchema } from "@bdr/contracts";
+import { opaqueIdSchema, portalAdminClientSchema, type PortalAdminClient } from "@bdr/contracts";
+import { z } from "zod";
 import { conflict, identityKeys, tenantKeys } from "@bdr/domain";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
@@ -24,14 +25,16 @@ import { revokeClientAccess } from "../auth/client-revocation";
 
 import { cognitoUserExists, normalizeLoginEmail } from "../auth/cognito-user-pools";
 import { readJsonObject, writeJsonObject, type JsonObjectSnapshot } from "./json-state";
+import { mapConcurrent, type PortalReadContext } from "./read-context";
 import { artifactContentDisposition } from "./artifact-filenames";
 
 const s3 = new S3Client({});
 const LINKS_KEY = "reportgen_portal/org_links.json";
 
-type PortalListMetrics = {
+export type PortalListMetrics = {
   getObjectCount: number;
   listObjectCount: number;
+  run?: PortalReadContext["run"];
 };
 
 export type PortalBuilding = {
@@ -82,7 +85,8 @@ async function readJsonVersion(
   metrics?: PortalListMetrics,
 ): Promise<JsonObjectSnapshot> {
   if (metrics) metrics.getObjectCount += 1;
-  return readJsonObject(s3, bucket(), key);
+  const read = () => readJsonObject(s3, bucket(), key);
+  return metrics?.run ? metrics.run(read) : read();
 }
 
 async function readJson(
@@ -100,16 +104,21 @@ async function writeJson(
   await writeJsonObject(s3, bucket(), key, data, expectedETag);
 }
 
-async function listChildren(prefix: string, metrics?: PortalListMetrics): Promise<string[]> {
-  if (metrics) metrics.listObjectCount += 1;
-  const response = await s3.send(new ListObjectsV2Command({
-    Bucket: bucket(),
-    ...(prefix ? { Prefix: prefix } : {}),
-    Delimiter: "/",
-  }));
-  return (response.CommonPrefixes ?? [])
-    .map((item) => item.Prefix ?? "")
-    .filter(Boolean);
+export async function listChildren(prefix: string, metrics?: PortalListMetrics): Promise<string[]> {
+  const found = new Set<string>(); const tokens = new Set<string>();
+  let continuation: string | undefined;
+  do {
+    if (metrics) metrics.listObjectCount++;
+    const read = () => s3.send(new ListObjectsV2Command({ Bucket: bucket(), ...(prefix ? { Prefix: prefix } : {}),
+      Delimiter: "/", ...(continuation ? { ContinuationToken: continuation } : {}) }));
+    const page = await (metrics?.run ? metrics.run(read) : read());
+    for (const item of page.CommonPrefixes ?? []) if (item.Prefix) found.add(item.Prefix);
+    if (!page.IsTruncated) break;
+    const next = page.NextContinuationToken;
+    if (!next || tokens.has(next)) throw new Error("portal_discovery_pagination_incomplete");
+    tokens.add(next); continuation = next;
+  } while (true);
+  return [...found].sort();
 }
 
 export const PORTAL_ADMIN_ORGANIZATION_ID = "bdr_portal_admins";
@@ -206,6 +215,26 @@ export async function organizationForClientPrefix(clientPrefix: string): Promise
 
 export async function linkedPrefixesForOrganization(organizationId: string): Promise<string[]> {
   return prefixesFor(organizationId, false);
+}
+
+export async function linkedPortalOrganizations(metrics?: PortalListMetrics): Promise<PortalAdminClient[]> {
+  const snapshot = await readJsonVersion(LINKS_KEY, metrics);
+  if (!snapshot.eTag) throw new Error("portal_organization_links_missing");
+  const links = z.object({ organizations: z.array(z.object({
+    organizationId: opaqueIdSchema, displayName: z.string().trim().min(1).max(200), clientPrefixes: z.array(z.string()).min(1),
+  })) }).parse(snapshot.value);
+  const organizations = new Map<string, PortalAdminClient>(); const owners = new Map<string, string>();
+  for (const row of links.organizations) {
+    const item = portalAdminClientSchema.parse({ ...row, clientPrefixes: [...new Set(row.clientPrefixes.map((prefix) => prefix.replace(/\/$/, "")))] });
+    const existing = organizations.get(item.organizationId);
+    if (existing && existing.displayName !== item.displayName) throw new Error("portal_organization_link_conflict");
+    for (const prefix of item.clientPrefixes) {
+      if (SKIP_PREFIXES.has(prefix) || owners.has(prefix) && owners.get(prefix) !== item.organizationId) throw new Error("portal_prefix_owner_conflict");
+      owners.set(prefix, item.organizationId);
+    }
+    organizations.set(item.organizationId, { ...item, clientPrefixes: [...new Set([...(existing?.clientPrefixes ?? []), ...item.clientPrefixes])].sort() });
+  }
+  return [...organizations.values()].sort((a, b) => a.displayName.localeCompare(b.displayName) || a.organizationId.localeCompare(b.organizationId));
 }
 
 export async function listLinkedClients(): Promise<Array<{ clientPrefix: string; displayName: string; organizationId: string; buildings: number }>> {
@@ -494,17 +523,13 @@ export async function prefixesFor(
   return prefixes;
 }
 
-async function buildingsUnder(clientPrefix: string, metrics?: PortalListMetrics): Promise<string[]> {
+export async function buildingsUnder(clientPrefix: string, metrics?: PortalListMetrics): Promise<string[]> {
   const found: string[] = [];
   const robots = await listChildren(`${clientPrefix}/`, metrics);
-  for (const robot of robots) {
-    const dates = await listChildren(robot, metrics);
-    for (const date of dates) {
-      const buildings = await listChildren(date, metrics);
-      found.push(...buildings.filter((prefix) => prefix.replace(/\/$/, "").split("/").length === 4));
-    }
-  }
-  return found;
+  const dates = (await mapConcurrent(robots, 4, (robot) => listChildren(robot, metrics))).flat();
+  const groups = await mapConcurrent(dates, 4, (date) => listChildren(date, metrics));
+  for (const buildings of groups) found.push(...buildings.filter((prefix) => prefix.replace(/\/$/, "").split("/").length === 4));
+  return [...new Set(found)].sort();
 }
 
 function normalizeEngineerNames(value: unknown): string {
@@ -894,9 +919,10 @@ export async function listPortalBuildings(
   organizationId: string | null,
   admin: boolean,
   clientPrefixesOverride?: readonly string[],
+  readMetrics?: PortalListMetrics,
 ): Promise<PortalBuilding[]> {
   const startedAt = Date.now();
-  const metrics: PortalListMetrics = { getObjectCount: 0, listObjectCount: 0 };
+  const metrics: PortalListMetrics = readMetrics ?? { getObjectCount: 0, listObjectCount: 0 };
   let clientPrefixCount = 0;
   let discoveredBuildingCount = 0;
   let returnedBuildingCount = 0;
@@ -906,16 +932,14 @@ export async function listPortalBuildings(
       ? [...clientPrefixesOverride]
       : await prefixesFor(organizationId, admin, metrics);
     clientPrefixCount = clientPrefixes.length;
-    const prefixes = (await Promise.all(
-      clientPrefixes.map((clientPrefix) => buildingsUnder(clientPrefix, metrics)),
-    )).flat();
+    const prefixes = [...new Set((await mapConcurrent(clientPrefixes, 4, (clientPrefix) => buildingsUnder(clientPrefix, metrics))).flat())];
     discoveredBuildingCount = prefixes.length;
-    const rows = await Promise.all(prefixes.map(async (prefix) => {
+    const rows = await mapConcurrent(prefixes, 4, async (prefix) => {
       const status = await readJson(`${prefix}reportgen/client_portal/status.json`, metrics);
       if (Object.keys(status).length === 0) return null;
       if (!clientCanSee(status, organizationId, admin)) return null;
       return summary(prefix, await portalListStatus(prefix, status, metrics));
-    }));
+    });
     const visible = rows.filter((row): row is PortalBuilding => row !== null);
     returnedBuildingCount = visible.length;
     return visible;
@@ -942,8 +966,8 @@ export async function loadPortalStatus(prefix: string): Promise<Record<string, u
 }
 
 // Artifact access needs current publication state, not operational page enrichment.
-export async function loadPortalReportStatus(prefix: string): Promise<Record<string, unknown>> {
-  return readJson(`${prefix.replace(/\/?$/, "/")}reportgen/client_portal/status.json`);
+export async function loadPortalReportStatus(prefix: string, metrics?: PortalListMetrics): Promise<Record<string, unknown>> {
+  return readJson(`${prefix.replace(/\/?$/, "/")}reportgen/client_portal/status.json`, metrics);
 }
 
 export async function resolvePortalArtifactSource(

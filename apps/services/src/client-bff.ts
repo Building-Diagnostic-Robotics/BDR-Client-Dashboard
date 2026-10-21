@@ -19,6 +19,7 @@ import type {
   APIGatewayProxyStructuredResultV2,
 } from "aws-lambda";
 import { ZodError } from "zod";
+import { adminClients, adminClientBuildings, adminClientBuildingCount, adminReview } from "./portal/admin-reads";
 
 import { safeReturnTo } from "./auth/primitives";
 import { AdminPoolOAuth } from "./auth/admin-oauth";
@@ -454,6 +455,18 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
           if (!linked) notFound();
           return linked.organizationId;
         };
+        if (method === "GET" && path.startsWith("/bff/portal/admin/")) {
+          if (!admin) return json(403, { error: "forbidden" });
+          if (path === "/bff/portal/admin/clients") return json(200, await adminClients(requestId(event)));
+          if (path === "/bff/portal/admin/review") return json(200, await adminReview(requestId(event)));
+          const selected = /^\/bff\/portal\/admin\/clients\/([^/]+)\/(buildings|building-count)$/.exec(path);
+          if (selected) {
+            const selectedOrganization = opaqueIdSchema.parse(decodeURIComponent(selected[1]!));
+            return json(200, selected[2] === "buildings"
+              ? await adminClientBuildings(selectedOrganization, requestId(event))
+              : await adminClientBuildingCount(selectedOrganization, requestId(event)));
+          }
+        }
         if (method === "GET" && path === "/bff/portal/buildings") {
           return json(200, {
             items: admin

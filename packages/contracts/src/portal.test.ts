@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  portalAdminReviewResponseSchema,
+  portalAdminClientListSchema,
   portalBuildingDetailSchema,
   portalBuildingIdResponseSchema,
   portalBuildingListResponseSchema,
@@ -73,5 +75,22 @@ describe("portal catalog contracts", () => {
         provisional: true,
       }],
     })).toThrow();
+  });
+});
+
+
+describe("administrator read contracts", () => {
+  it("rejects a complete queue with known failures and mismatched report keys", () => {
+    const failure = { organizationId: "org_0123456789abcdef", clientName: "Client", prefix: null };
+    expect(portalAdminReviewResponseSchema.safeParse({ items: [], complete: true, failures: [failure] }).success).toBe(false);
+    expect(portalAdminReviewResponseSchema.safeParse({ items: [], complete: false, failures: [failure] }).success).toBe(true);
+    const row = { organizationId: failure.organizationId, clientName: "Client", prefix: "client/robot/date/building/", name: "Building", reportType: "CAPITAL_PLANNING", reportKey: "CAPITAL_PLAN", artifactKey: null, generatedAt: null };
+    expect(portalAdminReviewResponseSchema.safeParse({ items: [row], complete: true, failures: [] }).success).toBe(true);
+    expect(portalAdminReviewResponseSchema.safeParse({ items: [{ ...row, reportKey: "ASSESSMENT" }], complete: true, failures: [] }).success).toBe(false);
+  });
+  it("rejects nested or traversal prefixes in the linked-client directory", () => {
+    for (const prefix of ["..", ".", "client/robot", "client\\robot"]) {
+      expect(portalAdminClientListSchema.safeParse({ items: [{ organizationId: "org_0123456789abcdef", displayName: "Client", clientPrefixes: [prefix] }] }).success).toBe(false);
+    }
   });
 });
