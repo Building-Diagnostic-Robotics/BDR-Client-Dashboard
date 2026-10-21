@@ -1,0 +1,182 @@
+name: Deploy Production
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - '.gitignore'
+      - 'audit-findings.md'
+  workflow_dispatch:
+
+concurrency:
+  group: cdk-production
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  validate:
+    name: Validate Production Quality Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck all workspaces
+        run: |
+          npm run typecheck
+          npm run typecheck:e2e
+
+      - name: Run unit & contract tests
+        run: npm run test
+
+      - name: Build all workspaces
+        run: npm run build
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium webkit
+
+      - name: Run local Playwright E2E suite
+        run: npm run test:e2e
+
+      - name: Synthesize Production CDK Stack
+        run: npm run cdk:prod:synth
+
+  diff-check:
+    name: Inspect CDK Diff & Gate
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      has_destructive_changes: ${{ steps.check_diff.outputs.has_destructive_changes }}
+      diff_summary: ${{ steps.check_diff.outputs.diff_summary }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Configure AWS Credentials (GitHub OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_PROD_ROLE_TO_ASSUME }}
+          aws-region: us-east-1
+
+      - name: Run CDK Diff for Production
+        run: |
+          npm run cdk:prod:diff > cdk-diff.txt 2>&1 || true
+          cat cdk-diff.txt
+
+      - name: Inspect CDK Diff for Destructive Changes
+        id: check_diff
+        run: |
+          npm run check-diff --workspace @bdr/infrastructure -- --file cdk-diff.txt
+
+      - name: Publish Diff Summary
+        run: |
+          echo "### Production CDK Infrastructure Inspection" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.check_diff.outputs.diff_summary }}" >> $GITHUB_STEP_SUMMARY
+          echo '```diff' >> $GITHUB_STEP_SUMMARY
+          tail -n 200 cdk-diff.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  deploy-production:
+    name: Deploy Production (AWS & Netlify)
+    needs: [validate, diff-check]
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment:
+      name: ${{ needs.diff-check.outputs.has_destructive_changes == 'true' && 'production-approval' || 'production' }}
+      url: https://bdrdashboard.netlify.app
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Configure AWS Credentials (GitHub OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_PROD_ROLE_TO_ASSUME }}
+          aws-region: us-east-1
+
+      - name: 1. Deploy AWS CDK Production Stack
+        run: npm run cdk:prod:deploy
+
+      - name: 2. Verify Backend API Health
+        run: |
+          OUTPUTS_FILE="packages/infrastructure/cdk-outputs.json"
+          if [ ! -f "$OUTPUTS_FILE" ]; then
+            echo "Error: CDK outputs file not found: $OUTPUTS_FILE"
+            exit 1
+          fi
+
+          CLIENT_BFF_URL=$(node -e "const data = require('./$OUTPUTS_FILE'); console.log(data['BdrClientPortal-production']?.ClientBffApiUrl || '');")
+          ADMIN_API_URL=$(node -e "const data = require('./$OUTPUTS_FILE'); console.log(data['BdrClientPortal-production']?.AdminApiUrl || '');")
+
+          echo "Verifying Client BFF: $CLIENT_BFF_URL/health"
+          curl -f --retry 5 --retry-delay 5 "$CLIENT_BFF_URL/health"
+          echo ""
+
+          echo "Verifying Admin API: $ADMIN_API_URL/health"
+          curl -f --retry 5 --retry-delay 5 "$ADMIN_API_URL/health"
+          echo ""
+
+      - name: 3. Publish Netlify Frontend
+        run: |
+          npx netlify deploy \
+            --build \
+            --prod \
+            --dir=apps/web \
+            --auth="${{ secrets.NETLIFY_AUTH_TOKEN }}" \
+            --site="${{ secrets.NETLIFY_SITE_ID }}"
+
+      - name: 4. Post-Deployment End-to-End Verification
+        run: |
+          echo "Verifying Netlify Frontend reachability..."
+          curl -f -I --retry 5 --retry-delay 5 "https://bdrdashboard.netlify.app"
+          echo ""
+
+          echo "Verifying Netlify rewrite to Client BFF Lambda (/bff/auth/session)..."
+          SESSION_RESPONSE=$(curl -s -f --retry 5 --retry-delay 5 "https://bdrdashboard.netlify.app/bff/auth/session")
+          echo "Session response: $SESSION_RESPONSE"
+
+          # Verify response contains valid session JSON
+          echo "$SESSION_RESPONSE" | grep -q "authenticated" || {
+            echo "Error: Unexpected response from /bff/auth/session via Netlify rewrite."
+            exit 1
+          }
+
+          echo "✅ Production deployment and end-to-end verification succeeded."
