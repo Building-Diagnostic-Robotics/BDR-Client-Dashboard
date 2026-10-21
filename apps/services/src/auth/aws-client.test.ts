@@ -91,3 +91,13 @@ describe("DynamoDB client sessions", () => {
     await expect(store.touchSessionActivity(input)).rejects.toThrow("DynamoDB unavailable");
   });
 });
+
+it("denies a stale active identity when the organization membership was revoked", async () => {
+  const identity = { issuer: "https://issuer.example.com/client", sub: "subject", organizationId: "org_0123456789abcdef", userId: "usr_0123456789abcdef", status: "ACTIVE", invitationId: null };
+  const send = vi.spyOn(DynamoDBDocumentClient.prototype, "send")
+    .mockResolvedValueOnce({ Item: identity } as never)
+    .mockResolvedValueOnce({ Item: { ...identity, email: "client@example.com", normalizedEmail: "client@example.com", currentIssuer: identity.issuer, currentSub: identity.sub, cognitoUsername: "subject", status: "REVOKED" } } as never);
+  const authStore = new DynamoClientAuthStore({ issuer: identity.issuer, identityTableName: "identities", tenantDataTableName: "tenants" } as ClientRuntimeConfig);
+  await expect(authStore.getClientIdentity({ PK: "subject", SK: "PROFILE" }, { consistentRead: true })).resolves.toBeNull();
+  expect(send).toHaveBeenCalledTimes(2);
+});

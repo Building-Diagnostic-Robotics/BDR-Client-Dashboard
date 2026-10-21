@@ -12,6 +12,7 @@ import { DomainError } from "./errors";
 import { sha256 } from "./keys";
 import {
   assertActiveAdminAuthorization,
+  assertActiveAdministratorGuard,
   assertActiveClientSession,
   assertMayDeactivateAdministrator,
 } from "./sessions";
@@ -139,4 +140,12 @@ describe("session authorization", () => {
       }),
     ).not.toThrow();
   });
+});
+
+
+it("requires a positive integral administrator guard without coercion", () => {
+  for (const value of [undefined, null, "1", 0, -1, 1.2, Number.NaN, Number.POSITIVE_INFINITY]) {
+    expect(() => assertActiveAdministratorGuard(value)).toThrow(DomainError);
+  }
+  expect(() => assertActiveAdministratorGuard(1)).not.toThrow();
 });

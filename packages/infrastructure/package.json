@@ -10,7 +10,9 @@
     "build": "tsc --noEmit -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
-    "synth": "cdk synth --app 'tsx bin/app.ts'"
+    "synth": "cdk synth --app 'tsx bin/app.ts'",
+    "audit-authentication-state": "tsx bin/audit-authentication-state.ts",
+    "reconcile-authentication-state": "tsx bin/reconcile-authentication-state.ts"
   },
   "dependencies": {
     "aws-cdk-lib": "2.269.0",

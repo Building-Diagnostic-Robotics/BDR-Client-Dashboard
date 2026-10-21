@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 
 import {
+  AdminGetUserCommand,
   AdminInitiateAuthCommand,
   AdminRespondToAuthChallengeCommand,
   CognitoIdentityProviderClient,
@@ -21,7 +22,8 @@ let clientSecret: string | undefined;
 export type PasswordLoginResult =
   | { kind: "tokens"; admin: boolean; tokens: ClientTokenSet }
   | { kind: "mfa"; session: string }
-  | { kind: "new-password"; session: string };
+  | { kind: "new-password"; session: string }
+  | { kind: "admin-setup" };
 
 export type PasswordPoolConfig = Readonly<{
   adminPoolId?: string;
@@ -94,6 +96,21 @@ export async function passwordLogin(input: {
   const hash = !admin && input.clientSecretArn
     ? await secretHash(email, clientId, input.clientSecretArn)
     : undefined;
+  const outcome = async (response: { ChallengeName?: string | undefined; Session?: string | undefined; AuthenticationResult?: Parameters<typeof tokensFrom>[0] }, mfaCompleted = false): Promise<PasswordLoginResult> => {
+    if (response.ChallengeName === "SOFTWARE_TOKEN_MFA" && response.Session) return { kind: "mfa", session: response.Session };
+    if (response.ChallengeName === "MFA_SETUP" && admin) return { kind: "admin-setup" };
+    if (response.ChallengeName === "NEW_PASSWORD_REQUIRED" && response.Session) {
+      return admin ? { kind: "admin-setup" } : { kind: "new-password", session: response.Session };
+    }
+    if (response.ChallengeName) throw new Error("Unsupported authentication challenge");
+    const tokens = tokensFrom(response.AuthenticationResult);
+    if (admin) {
+      if (!mfaCompleted) return { kind: "admin-setup" };
+      const user = await cognito.send(new AdminGetUserCommand({ UserPoolId: userPoolId, Username: email }));
+      if (!user.Enabled || user.UserStatus !== "CONFIRMED" || !user.UserMFASettingList?.includes("SOFTWARE_TOKEN_MFA")) return { kind: "admin-setup" };
+    }
+    return { kind: "tokens", admin, tokens };
+  };
   const authParameters: Record<string, string> = {
     USERNAME: email,
     PASSWORD: input.password,
@@ -111,7 +128,7 @@ export async function passwordLogin(input: {
         ...(hash ? { SECRET_HASH: hash } : {}),
       },
     }));
-    return { kind: "tokens", admin, tokens: tokensFrom(response.AuthenticationResult) };
+    return outcome(response);
   }
   if (input.mfaCode && input.mfaSession) {
     const response = await cognito.send(new AdminRespondToAuthChallengeCommand({
@@ -125,7 +142,7 @@ export async function passwordLogin(input: {
         ...(hash ? { SECRET_HASH: hash } : {}),
       },
     }));
-    return { kind: "tokens", admin, tokens: tokensFrom(response.AuthenticationResult) };
+    return outcome(response, true);
   }
   const started = await cognito.send(new AdminInitiateAuthCommand({
     UserPoolId: userPoolId,
@@ -133,11 +150,5 @@ export async function passwordLogin(input: {
     AuthFlow: "ADMIN_USER_PASSWORD_AUTH",
     AuthParameters: authParameters,
   }));
-  if (started.ChallengeName === "SOFTWARE_TOKEN_MFA" && started.Session) {
-    return { kind: "mfa", session: started.Session };
-  }
-  if (started.ChallengeName === "NEW_PASSWORD_REQUIRED" && started.Session) {
-    return { kind: "new-password", session: started.Session };
-  }
-  return { kind: "tokens", admin, tokens: tokensFrom(started.AuthenticationResult) };
+  return outcome(started);
 }

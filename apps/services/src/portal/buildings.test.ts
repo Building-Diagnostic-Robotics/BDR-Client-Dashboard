@@ -5,7 +5,6 @@ import {
   clientCanSee,
   clientUserStatus,
   createClientAccount,
-  createPortalAdmin,
   listPortalBuildings,
   loadPortalReportStatus,
   mergePortalListMetadata,
@@ -123,18 +122,6 @@ describe("shared client account status", () => {
 });
 
 describe("cross-pool email uniqueness", () => {
-  it("rejects administrator creation when the email exists in the client pool", async () => {
-    vi.stubEnv("ADMIN_ISSUER", "https://issuer.example.com/admin-pool");
-    vi.stubEnv("CLIENT_USER_POOL_ID", "client-pool");
-    const send = vi.fn(async (_command: { input: Record<string, unknown> }) => ({ Username: "client-user" }));
-
-    await expect(createPortalAdmin(" Client@Example.com ", { send } as never)).rejects.toMatchObject({
-      code: "CONFLICT",
-      message: "This email already belongs to a client account",
-    });
-    expect(send).toHaveBeenCalledOnce();
-  });
-
   it("rejects client creation when the email exists in the administrator pool", async () => {
     vi.stubEnv("ADMIN_ISSUER", "https://issuer.example.com/admin-pool");
     vi.stubEnv("CLIENT_USER_POOL_ID", "client-pool");
@@ -145,6 +132,7 @@ describe("cross-pool email uniqueness", () => {
 
     await expect(createClientAccount(
       { email: " Admin@Example.com ", clientPrefix: "client-folder" },
+      { adminId: "admin_0123456789abcdef", sub: "actor", requestId: "request" },
       { send } as never,
     )).rejects.toMatchObject({
       code: "CONFLICT",
@@ -161,6 +149,7 @@ describe("cross-pool email uniqueness", () => {
       "client-folder",
       "current@example.com",
       "admin@example.com",
+      { adminId: "admin_actor", sub: "actor", requestId: "request" },
       { send } as never,
     )).rejects.toMatchObject({ code: "CONFLICT" });
     expect(send).toHaveBeenCalledOnce();

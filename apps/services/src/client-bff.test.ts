@@ -4,9 +4,15 @@ import type { ClientIdentity, ClientSession } from "@bdr/contracts";
 import { DomainError, sha256 } from "@bdr/domain";
 import type { APIGatewayProxyEventV2 } from "aws-lambda";
 
+import { passwordLogin } from "./auth/password-login";
 import { createClientBffHandler } from "./client-bff";
 import { currentHowToReadForOrg, signedArtifactRead, signedReadWithDisposition } from "./portal/buildings";
 import { resolvePortalArtifact } from "./portal/catalog";
+
+vi.mock("./auth/password-login", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./auth/password-login")>();
+  return { ...actual, passwordLogin: vi.fn() };
+});
 
 vi.mock("./portal/buildings", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./portal/buildings")>();
@@ -533,4 +539,16 @@ describe("client BFF routes", () => {
     expect(response.statusCode).toBe(401);
     expect(resolvePortalArtifact).not.toHaveBeenCalled();
   });
+});
+
+
+it("offers hosted administrator setup without establishing cookies or a dashboard session", async () => {
+  vi.mocked(passwordLogin).mockResolvedValueOnce({ kind: "admin-setup" });
+  const operations = service();
+  const handler = createClientBffHandler({ service: operations, portalOrigin: "https://portal.example.com" });
+  const response = await handler(event("POST", "/bff/auth/password", { body: JSON.stringify({ email: "admin@example.com", password: "temporary", returnTo: "//untrusted.example" }) }));
+  expect(response.statusCode).toBe(200);
+  expect(JSON.parse(response.body!)).toEqual({ setupRequired: true, setupPath: "/bff/auth/admin/login?returnTo=%2F" });
+  expect(response.cookies ?? []).toHaveLength(0);
+  expect(operations.establishVerifiedSession).not.toHaveBeenCalled();
 });

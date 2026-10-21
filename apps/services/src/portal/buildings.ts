@@ -2,10 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
-  AdminAddUserToGroupCommand,
   AdminCreateUserCommand,
-  AdminDisableUserCommand,
-  AdminEnableUserCommand,
   AdminGetUserCommand,
   CognitoIdentityProviderClient,
 } from "@aws-sdk/client-cognito-identity-provider";
@@ -16,9 +13,14 @@ import {
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
-import { DynamoDBDocumentClient, PutCommand, QueryCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { opaqueIdSchema } from "@bdr/contracts";
 import { conflict, identityKeys, tenantKeys } from "@bdr/domain";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+
+import { AdministratorDirectory, type AdministratorActor } from "../auth/admin-directory";
+import { ClientInvitations } from "../auth/client-invitations";
+import { revokeClientAccess } from "../auth/client-revocation";
 
 import { cognitoUserExists, normalizeLoginEmail } from "../auth/cognito-user-pools";
 import { readJsonObject, writeJsonObject, type JsonObjectSnapshot } from "./json-state";
@@ -120,17 +122,6 @@ async function assertClientEmailAvailable(
   if (!adminPoolId) throw new Error("missing_configuration");
   if (await cognitoUserExists(cognito, adminPoolId, email)) {
     conflict("This email already belongs to an administrator account");
-  }
-}
-
-async function assertAdminEmailAvailable(
-  cognito: CognitoIdentityProviderClient,
-  email: string,
-): Promise<void> {
-  const clientPoolId = process.env.CLIENT_USER_POOL_ID;
-  if (!clientPoolId) throw new Error("missing_configuration");
-  if (await cognitoUserExists(cognito, clientPoolId, email)) {
-    conflict("This email already belongs to a client account");
   }
 }
 
@@ -309,128 +300,48 @@ export async function ownsPrefix(organizationId: string | null, admin: boolean, 
   return roots.some((root) => normalized === root || normalized.startsWith(`${root}/`));
 }
 
-export async function createPortalAdmin(
-  emailInput: string,
-  cognito = new CognitoIdentityProviderClient({}),
-): Promise<{ email: string }> {
-  const email = normalizeLoginEmail(emailInput);
-  if (!email.includes("@")) throw new Error("invalid_request");
-  const poolId = process.env.ADMIN_ISSUER?.split("/").pop();
-  if (!poolId) throw new Error("missing_configuration");
-  await assertAdminEmailAvailable(cognito, email);
-  try {
-    await cognito.send(new AdminCreateUserCommand({
-      UserPoolId: poolId,
-      Username: email,
-      UserAttributes: [
-        { Name: "email", Value: email },
-        { Name: "email_verified", Value: "true" },
-      ],
-      DesiredDeliveryMediums: ["EMAIL"],
-    }));
-  } catch (error) {
-    if (!(error instanceof Error) || error.name !== "UsernameExistsException") throw error;
-  }
-  await cognito.send(new AdminAddUserToGroupCommand({
-    UserPoolId: poolId,
-    Username: email,
-    GroupName: "bdr-admins",
-  }));
-  return { email };
+export async function createPortalAdmin(email: string, actor: AdministratorActor, resend = false) {
+  const required = (name: string) => { const value = process.env[name]; if (!value) throw new Error(`Missing ${name}`); return value; };
+  return new AdministratorDirectory({ issuer: required("ADMIN_ISSUER"), clientPoolId: required("CLIENT_USER_POOL_ID"),
+    identityTable: required("IDENTITY_TABLE_NAME"), controlTable: required("ADMIN_CONTROL_TABLE_NAME"), auditTable: required("AUDIT_TABLE_NAME") }).invite(email, actor, resend);
+}
+
+function clientInvitations(cognito: CognitoIdentityProviderClient) {
+  const required = (name: string) => { const value = process.env[name]; if (!value) throw new Error(`Missing ${name}`); return value; };
+  return new ClientInvitations({ issuer: required("CLIENT_ISSUER"), poolId: required("CLIENT_USER_POOL_ID"), adminIssuer: required("ADMIN_ISSUER"),
+    identityTable: required("IDENTITY_TABLE_NAME"), tenantTable: required("TENANT_DATA_TABLE_NAME"), controlTable: required("ADMIN_CONTROL_TABLE_NAME"), auditTable: required("AUDIT_TABLE_NAME") },
+    DynamoDBDocumentClient.from(new DynamoDBClient({})), cognito);
+}
+
+async function accountOrganization(clientPrefix: string) {
+  const folder = folderOf(clientPrefix);
+  const rows = orgRows(await readJson(LINKS_KEY)).filter((org) => (org.clientPrefixes ?? []).some((prefix) => prefix.replace(/\/$/, "") === folder));
+  const organizationId = opaqueIdSchema.safeParse(rows[0]?.organizationId);
+  if (rows.length !== 1 || !organizationId.success) conflict("Client organization link is missing or ambiguous; reconcile it before managing accounts");
+  return { organizationId: organizationId.data };
 }
 
 export async function createClientAccount(
   input: { email: string; clientPrefix: string },
+  actor: AdministratorActor,
   cognito = new CognitoIdentityProviderClient({}),
-): Promise<{ email: string; organizationId: string }> {
+) {
   const email = normalizeLoginEmail(input.email);
-  const clientPrefix = input.clientPrefix.replace(/^\/+|\/+$/g, "").split("/")[0] ?? "";
+  const clientPrefix = folderOf(input.clientPrefix);
   if (!email.includes("@") || !clientPrefix || SKIP_PREFIXES.has(clientPrefix)) throw new Error("invalid_request");
-  const poolId = process.env.CLIENT_USER_POOL_ID;
-  const issuer = process.env.CLIENT_ISSUER;
-  const identityTable = process.env.IDENTITY_TABLE_NAME;
-  const tenantTable = process.env.TENANT_DATA_TABLE_NAME;
-  if (!poolId || !issuer || !identityTable || !tenantTable) throw new Error("missing_configuration");
   await assertClientEmailAvailable(cognito, email);
-  let sub: string | undefined;
-  let username = email;
-  try {
-    const created = await cognito.send(new AdminCreateUserCommand({
-      UserPoolId: poolId,
-      Username: email,
-      UserAttributes: [
-        { Name: "email", Value: email },
-        { Name: "email_verified", Value: "true" },
-      ],
-      DesiredDeliveryMediums: ["EMAIL"],
-    }));
-    sub = created.User?.Attributes?.find((attribute) => attribute.Name === "sub")?.Value;
-    username = created.User?.Username ?? email;
-  } catch (error) {
-    if (!(error instanceof Error) || error.name !== "UsernameExistsException") throw error;
-    const existing = await cognito.send(new AdminGetUserCommand({ UserPoolId: poolId, Username: email }));
-    sub = existing.UserAttributes?.find((attribute) => attribute.Name === "sub")?.Value;
-    username = existing.Username ?? email;
-    if (existing.Enabled === false) {
-      await cognito.send(new AdminEnableUserCommand({ UserPoolId: poolId, Username: username }));
-    }
+  const linked = await accountOrganization(clientPrefix);
+  // Resolve the organization from the server-owned link. Inviting cannot rewrite it.
+  try { return await clientInvitations(cognito).invite(email, linked.organizationId, actor); }
+  catch (error) {
+    if (error instanceof Error && error.name === "TransactionCanceledException") conflict("Account ownership or administrator access changed. Reload and review before retrying; an incomplete invitation may require reconciliation.");
+    throw error;
   }
-  if (!sub) throw new Error("missing_subject");
-  const snapshot = await readJsonVersion(LINKS_KEY);
-  const links = snapshot.value;
-  const current = orgRows(links);
-  const existing = orgForFolder(current, clientPrefix);
-  if (!existing) throw new Error("not_linked");
-  const organizationId = organizationIdFor(clientPrefix);
-  const displayName = String(existing.displayName || clientPrefix);
-  const userId = `usr${createHash("sha256").update(`${organizationId}:${email}`).digest("hex")}`.slice(0, 32);
-  const dynamo = DynamoDBDocumentClient.from(new DynamoDBClient({}));
-  const identity = {
-    issuer,
-    sub,
-    userId,
-    organizationId,
-    status: "ACTIVE" as const,
-    invitationId: null,
-  };
-  await dynamo.send(new PutCommand({
-    TableName: tenantTable,
-    Item: {
-      ...tenantKeys.organization(organizationId),
-      organizationId,
-      displayName,
-      status: "ACTIVE",
-    },
-  }));
-  await dynamo.send(new PutCommand({
-    TableName: tenantTable,
-    Item: {
-      ...tenantKeys.user(organizationId, userId),
-      organizationId,
-      userId,
-      email,
-      normalizedEmail: email,
-      status: "ACTIVE",
-      currentIssuer: issuer,
-      currentSub: sub,
-      cognitoUsername: username,
-      revision: randomUUID(),
-    },
-  }));
-  await dynamo.send(new PutCommand({
-    TableName: identityTable,
-    Item: { ...identityKeys.subject(issuer, sub), ...identity },
-  }));
-  existing.organizationId = organizationId;
-  existing.displayName = displayName;
-  existing.clientPrefixes = [clientPrefix];
-  links.organizations = current;
-  await writeJson(LINKS_KEY, links, snapshot.eTag);
-  return { email, organizationId };
 }
 
 export async function listClientUsers(clientPrefix: string): Promise<Array<{ email: string; status: string; userId: string }>> {
-  const organizationId = `org${createHash("sha256").update(clientPrefix.replace(/\/$/, "").split("/")[0] || "").digest("hex")}`.slice(0, 32);
+  const organization = await accountOrganization(clientPrefix);
+  const organizationId = organization.organizationId;
   const table = process.env.TENANT_DATA_TABLE_NAME;
   if (!table) return [];
   const dynamo = DynamoDBDocumentClient.from(new DynamoDBClient({}));
@@ -477,9 +388,12 @@ export async function resendClientInvite(
   if (!poolId) throw new Error("missing_configuration");
   const normalizedEmail = normalizeLoginEmail(email);
   await assertClientEmailAvailable(cognito, normalizedEmail);
+  const organization = await accountOrganization(clientPrefix);
+  const owned = await clientInvitations(cognito).existing(normalizedEmail, organization.organizationId);
+  if (owned.user.UserStatus !== "FORCE_CHANGE_PASSWORD") conflict("This account is no longer awaiting invitation acceptance");
   await cognito.send(new AdminCreateUserCommand({
     UserPoolId: poolId,
-    Username: normalizedEmail,
+    Username: owned.user.Username!,
     MessageAction: "RESEND",
     DesiredDeliveryMediums: ["EMAIL"],
   }));
@@ -489,11 +403,15 @@ export async function replaceClientEmail(
   clientPrefix: string,
   email: string,
   nextEmail: string,
+  actor: AdministratorActor,
   cognito = new CognitoIdentityProviderClient({}),
 ): Promise<void> {
   await assertClientEmailAvailable(cognito, normalizeLoginEmail(nextEmail));
-  await revokeClientUser(clientPrefix, email);
-  await createClientAccount({ email: nextEmail, clientPrefix }, cognito);
+  const clientPoolId = process.env.CLIENT_USER_POOL_ID;
+  if (!clientPoolId) throw new Error("Missing CLIENT_USER_POOL_ID");
+  if (await cognitoUserExists(cognito, clientPoolId, normalizeLoginEmail(nextEmail))) conflict("The replacement email already belongs to a client account");
+  await revokeClientUser(clientPrefix, email, actor);
+  await createClientAccount({ email: nextEmail, clientPrefix }, actor, cognito);
 }
 
 export async function howToReadFor(clientPrefix: string): Promise<{ published: boolean; history: number }> {
@@ -544,26 +462,18 @@ export async function currentHowToReadForOrg(
   }
 }
 
-export async function revokeClientUser(clientPrefix: string, email: string): Promise<void> {
+export async function revokeClientUser(clientPrefix: string, email: string, actor: AdministratorActor): Promise<void> {
+  const organization = await organizationForClientPrefix(clientPrefix);
+  if (!organization) throw new Error("not_found");
   const users = await listClientUsers(clientPrefix);
-  const match = users.find((user) => user.email.toLowerCase() === email.trim().toLowerCase());
-  if (!match) throw new Error("not_found");
-  const poolId = process.env.CLIENT_USER_POOL_ID;
-  const table = process.env.TENANT_DATA_TABLE_NAME;
-  if (!poolId || !table) throw new Error("missing_configuration");
-  const organizationId = `org${createHash("sha256").update(clientPrefix.replace(/\/$/, "").split("/")[0] || "").digest("hex")}`.slice(0, 32);
-  await new CognitoIdentityProviderClient({}).send(new AdminDisableUserCommand({
-    UserPoolId: poolId,
-    Username: email.trim().toLowerCase(),
-  }));
-  const dynamo = DynamoDBDocumentClient.from(new DynamoDBClient({}));
-  await dynamo.send(new UpdateCommand({
-    TableName: table,
-    Key: { PK: `ORG#${organizationId}`, SK: `USER#${match.userId}` },
-    UpdateExpression: "SET #status = :revoked",
-    ExpressionAttributeNames: { "#status": "status" },
-    ExpressionAttributeValues: { ":revoked": "REVOKED" },
-  }));
+  const match = users.filter((user) => user.email.toLowerCase() === email.trim().toLowerCase());
+  if (match.length !== 1) conflict("Client membership is missing or ambiguous");
+  const required = (name: string) => { const value = process.env[name]; if (!value) throw new Error(`Missing ${name}`); return value; };
+  const document = DynamoDBDocumentClient.from(new DynamoDBClient({}));
+  const user = (await document.send(new GetCommand({ TableName: required("TENANT_DATA_TABLE_NAME"), Key: tenantKeys.user(organization.organizationId, match[0]!.userId), ConsistentRead: true }))).Item;
+  if (typeof user?.revision !== "string") conflict("Client membership requires reconciliation");
+  await revokeClientAccess({ identityTable: required("IDENTITY_TABLE_NAME"), tenantTable: required("TENANT_DATA_TABLE_NAME"), sessionTable: required("SESSION_TABLE_NAME"), auditTable: required("AUDIT_TABLE_NAME"),
+    clientPoolId: required("CLIENT_USER_POOL_ID"), clientIssuer: required("CLIENT_ISSUER") }, organization.organizationId, match[0]!.userId, user.revision, actor, document, new CognitoIdentityProviderClient({}));
 }
 
 export async function prefixesFor(

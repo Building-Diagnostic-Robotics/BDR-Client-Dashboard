@@ -9,10 +9,12 @@ import {
   PutCommand,
   TransactWriteCommand,
   UpdateCommand,
+  type TransactWriteCommandInput,
 } from "@aws-sdk/lib-dynamodb";
 import {
   adminInvitationSchema,
   clientIdentitySchema,
+  clientUserSchema,
   clientSessionSchema,
   oauthLoginTransactionSchema,
   organizationSchema,
@@ -24,6 +26,8 @@ import {
 } from "@bdr/contracts";
 import { CLIENT_INACTIVITY_TIMEOUT_MS, adminControlKeys, auditExpiresAt, auditKeys, identityKeys, sessionKeys, sha256, tenantKeys, type ConsistentRead, type DynamoKey } from "@bdr/domain";
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
+
+import { AdministratorDirectory, ADMIN_DASHBOARD_ORGANIZATION } from "./admin-directory";
 
 import type {
   ClientAuthStore,
@@ -368,10 +372,28 @@ export class DynamoClientAuthStore implements ClientAuthStore {
         ConsistentRead: true,
       }),
     );
-    return result.Item ? clientIdentitySchema.parse(result.Item) : null;
+    if (!result.Item) return null;
+    const adminIssuer = process.env.ADMIN_ISSUER;
+    if (adminIssuer && result.Item.issuer === adminIssuer) {
+      const active = await this.adminDirectory().authorize(String(result.Item.sub));
+      return { issuer: active.identity.issuer, sub: active.identity.sub, userId: active.identity.adminId,
+        organizationId: ADMIN_DASHBOARD_ORGANIZATION, status: "ACTIVE", invitationId: null };
+    }
+    const identity = clientIdentitySchema.parse(result.Item);
+    if (identity.issuer !== this.config.issuer) return null;
+    const membership = await dynamo.send(new GetCommand({ TableName: this.config.tenantDataTableName,
+      Key: tenantKeys.user(identity.organizationId, identity.userId), ConsistentRead: true }));
+    const user = clientUserSchema.safeParse(membership.Item);
+    if (!user.success || user.data.organizationId !== identity.organizationId || user.data.userId !== identity.userId
+      || user.data.currentIssuer !== identity.issuer || user.data.currentSub !== identity.sub
+      || user.data.status !== identity.status || user.data.status === "REVOKED") return null;
+    return identity;
   }
 
   async getOrganization(key: DynamoKey, _options: ConsistentRead): Promise<Organization | null> {
+    if (key.PK === `ORG#${ADMIN_DASHBOARD_ORGANIZATION}` && key.SK === "META") {
+      return { organizationId: ADMIN_DASHBOARD_ORGANIZATION, displayName: "BDR admins", status: "ACTIVE" };
+    }
     const result = await dynamo.send(
       new GetCommand({
         TableName: this.config.tenantDataTableName,
@@ -382,39 +404,36 @@ export class DynamoClientAuthStore implements ClientAuthStore {
     return result.Item ? organizationSchema.parse(result.Item) : null;
   }
 
-  async ensurePortalAdmin(input: {
-    issuer: string;
-    sub: string;
-    organizationId: string;
-    userId: string;
-  }): Promise<ClientIdentity> {
-    const organization = {
-      organizationId: input.organizationId,
-      displayName: "BDR admins",
-      status: "ACTIVE" as const,
-    };
-    const identity: ClientIdentity = {
-      issuer: input.issuer,
-      sub: input.sub,
-      userId: input.userId,
-      organizationId: input.organizationId,
-      status: "ACTIVE",
-      invitationId: null,
-    };
-    await dynamo.send(new PutCommand({
-      TableName: this.config.tenantDataTableName,
-      Item: { ...tenantKeys.organization(input.organizationId), ...organization },
-    }));
-    const existing = await dynamo.send(new GetCommand({
-      TableName: this.config.identityTableName,
-      Key: identityKeys.subject(input.issuer, input.sub),
-      ConsistentRead: true,
-    }));
-    await dynamo.send(new PutCommand({
-      TableName: this.config.identityTableName,
-      Item: { ...(existing.Item ?? {}), ...identityKeys.subject(input.issuer, input.sub), ...identity },
-    }));
-    return identity;
+  private adminDirectory(): AdministratorDirectory {
+    return new AdministratorDirectory({ issuer: required(process.env.ADMIN_ISSUER, "ADMIN_ISSUER"),
+      clientPoolId: required(process.env.CLIENT_USER_POOL_ID, "CLIENT_USER_POOL_ID"),
+      identityTable: this.config.identityTableName, controlTable: this.config.adminControlTableName, auditTable: this.config.auditTableName }, dynamo);
+  }
+
+  async completeAdministratorEnrollment(input: { issuer: string; sub: string; requestId: string }): Promise<void> {
+    if (input.issuer !== process.env.ADMIN_ISSUER) throw new Error("Unexpected administrator issuer");
+    await this.adminDirectory().complete(input.sub, input.requestId);
+  }
+
+  private async authorizationChecks(identity: ClientIdentity): Promise<NonNullable<TransactWriteCommandInput["TransactItems"]>> {
+    if (identity.issuer === process.env.ADMIN_ISSUER) {
+      const active = await this.adminDirectory().authorize(identity.sub);
+      if (active.identity.adminId !== identity.userId) throw new Error("Administrator identity changed");
+      return [
+        { ConditionCheck: { TableName: this.config.identityTableName, Key: identityKeys.subject(identity.issuer, identity.sub),
+          ConditionExpression: "adminId = :admin AND issuer = :issuer AND #sub = :sub", ExpressionAttributeNames: { "#sub": "sub" }, ExpressionAttributeValues: { ":admin": identity.userId, ":issuer": identity.issuer, ":sub": identity.sub } } },
+        { ConditionCheck: { TableName: this.config.identityTableName, Key: identityKeys.adminProfile(identity.userId),
+          ConditionExpression: "#status = :active AND #role = :role AND totpEnrolled = :true", ExpressionAttributeNames: { "#status": "status", "#role": "role" }, ExpressionAttributeValues: { ":active": "ACTIVE", ":role": "BDR_ADMIN", ":true": true } } },
+        { ConditionCheck: { TableName: this.config.identityTableName, Key: identityKeys.adminGuard(), ConditionExpression: "activeAdminCount = :count", ExpressionAttributeValues: { ":count": active.count } } },
+      ];
+    }
+    return [
+      { ConditionCheck: { TableName: this.config.identityTableName, Key: identityKeys.subject(identity.issuer, identity.sub),
+        ConditionExpression: "#status = :active AND issuer = :issuer AND #sub = :sub AND organizationId = :org AND userId = :user", ExpressionAttributeNames: { "#status": "status", "#sub": "sub" }, ExpressionAttributeValues: { ":active": "ACTIVE", ":issuer": identity.issuer, ":sub": identity.sub, ":org": identity.organizationId, ":user": identity.userId } } },
+      { ConditionCheck: { TableName: this.config.tenantDataTableName, Key: tenantKeys.user(identity.organizationId, identity.userId),
+        ConditionExpression: "#status = :active AND currentIssuer = :issuer AND currentSub = :sub", ExpressionAttributeNames: { "#status": "status" }, ExpressionAttributeValues: { ":active": "ACTIVE", ":issuer": identity.issuer, ":sub": identity.sub } } },
+      { ConditionCheck: { TableName: this.config.tenantDataTableName, Key: tenantKeys.organization(identity.organizationId), ConditionExpression: "#status = :active", ExpressionAttributeNames: { "#status": "status" }, ExpressionAttributeValues: { ":active": "ACTIVE" } } },
+    ];
   }
 
   async consumeLoginAndCreateSession(input: {
@@ -444,31 +463,7 @@ export class DynamoClientAuthStore implements ClientAuthStore {
               },
             },
           },
-          {
-            ConditionCheck: {
-              TableName: this.config.identityTableName,
-              Key: identityKeys.subject(input.identity.issuer, input.identity.sub),
-              ConditionExpression:
-                "#status = :active AND issuer = :issuer AND #sub = :sub AND organizationId = :organizationId AND userId = :userId",
-              ExpressionAttributeNames: { "#status": "status", "#sub": "sub" },
-              ExpressionAttributeValues: {
-                ":active": "ACTIVE",
-                ":issuer": input.identity.issuer,
-                ":sub": input.identity.sub,
-                ":organizationId": input.identity.organizationId,
-                ":userId": input.identity.userId,
-              },
-            },
-          },
-          {
-            ConditionCheck: {
-              TableName: this.config.tenantDataTableName,
-              Key: { PK: `ORG#${input.identity.organizationId}`, SK: "META" },
-              ConditionExpression: "#status = :active",
-              ExpressionAttributeNames: { "#status": "status" },
-              ExpressionAttributeValues: { ":active": "ACTIVE" },
-            },
-          },
+          ...await this.authorizationChecks(input.identity),
           {
             Put: {
               TableName: this.config.sessionTableName,
@@ -542,9 +537,12 @@ export class DynamoClientAuthStore implements ClientAuthStore {
     newSession: ClientSession;
     revokedAt: string;
   }): Promise<void> {
+    const identity = await this.getClientIdentity(identityKeys.subject(input.oldSession.issuer, input.oldSession.sub), { consistentRead: true });
+    if (!identity) throw new Error("Session identity is no longer active");
     await dynamo.send(
       new TransactWriteCommand({
         TransactItems: [
+          ...await this.authorizationChecks(identity),
           this.revokeSessionUpdate(sessionKeys.clientSession(input.oldRawSessionId), input.revokedAt),
           this.revokeSessionUpdate(
             sessionKeys.clientSubjectPointer(

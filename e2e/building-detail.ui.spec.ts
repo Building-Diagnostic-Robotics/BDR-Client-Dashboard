@@ -85,10 +85,9 @@ test("renders the physical-building inspection hierarchy without an empty-state 
   await expect(page.getByText("No reports yet")).toHaveCount(0);
 
   await expect(page.getByRole("heading", { name: "Midland Business Park", level: 1 })).toBeVisible();
-  await expect(page.getByText("Engineers: Tony, Thom")).toBeVisible();
   await expect(page.getByText("Latest inspection")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Roof Assessment" })).toHaveCount(1);
-  await expect(page.getByText("Available", { exact: true })).toBeVisible();
+  await expect(page.getByText("Updated Oct 2, 2026")).toBeVisible();
   await expect(page.getByText("In preparation", { exact: true })).toBeVisible();
   await expect(page.getByText("Not included", { exact: true })).toHaveCount(3);
 

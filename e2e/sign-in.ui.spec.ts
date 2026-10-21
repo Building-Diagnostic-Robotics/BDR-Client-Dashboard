@@ -126,3 +126,18 @@ test.describe("Sign-In UI & Password Recovery", () => {
     await expect(page.getByRole("heading", { name: "Sign In", exact: true })).toBeVisible();
   });
 });
+
+test("administrator onboarding offers only the trusted hosted setup link", async ({ page }) => {
+  await page.route("**/bff/auth/password", async (route) => {
+    await route.fulfill({ json: { setupRequired: true, setupPath: "/bff/auth/admin/login?returnTo=%2Fprojects" } });
+  });
+  await page.goto("/sign-in");
+  await expect(page.locator("form[data-ready='true']")).toBeVisible();
+  await page.getByLabel("Email", { exact: true }).fill("admin@example.com");
+  await page.getByLabel("Password", { exact: true }).fill("TemporaryPassword123!");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Set up administrator access" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Continue to secure setup" })).toHaveAttribute("href", "/bff/auth/admin/login?returnTo=%2Fprojects");
+  await page.getByRole("button", { name: "Back to sign in", exact: true }).click();
+  await expect(page.getByLabel("Password", { exact: true })).toHaveValue("");
+});

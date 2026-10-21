@@ -1,5 +1,6 @@
 import { CognitoIdentityProviderClient } from "@aws-sdk/client-cognito-identity-provider";
 import {
+  administratorInviteRequestSchema,
   artifactAccessRequestSchema,
   attachPortalInspectionRequestSchema,
   opaqueIdSchema,
@@ -19,6 +20,7 @@ import type {
 } from "aws-lambda";
 import { ZodError } from "zod";
 
+import { safeReturnTo } from "./auth/primitives";
 import { AdminPoolOAuth } from "./auth/admin-oauth";
 import { cognitoUserExists } from "./auth/cognito-user-pools";
 import { passwordLogin } from "./auth/password-login";
@@ -39,7 +41,7 @@ import {
 import { JSON_HEADERS, clearCookie, json, redirect, requestId, secureCookie } from "./shared/http";
 import { ClientResourceService } from "./client/resources";
 import { emailBlocked } from "./portal/email";
-import { allowedClientKey, clientCanSee, commitHowToRead, createClientAccount, createPortalAdmin, currentHowToReadForOrg, grantPortalAdmin, howToReadFor, howToReadUpload, linkClient, listClientUsers, listLinkedClients, listPortalBuildings, listUnlinkedFolders, loadPortalStatus, loadPortalStatusVersion, organizationForClientPrefix, ownsPrefix, PORTAL_ADMIN_ORGANIZATION_ID, renameClient, replaceClientEmail, reportFileMatches, resendClientInvite, revokeClientUser, savePortalStatus, signedArtifactRead, signedRead, signedReadWithDisposition, signedUpload } from "./portal/buildings";
+import { allowedClientKey, clientCanSee, commitHowToRead, createClientAccount, createPortalAdmin, currentHowToReadForOrg, howToReadFor, howToReadUpload, linkClient, listClientUsers, listLinkedClients, listPortalBuildings, listUnlinkedFolders, loadPortalStatus, loadPortalStatusVersion, organizationForClientPrefix, ownsPrefix, PORTAL_ADMIN_ORGANIZATION_ID, renameClient, replaceClientEmail, reportFileMatches, resendClientInvite, revokeClientUser, savePortalStatus, signedArtifactRead, signedRead, signedReadWithDisposition, signedUpload } from "./portal/buildings";
 import { attachPortalInspection, getPortalCatalogBuilding, listPortalAdminCatalogBuildings, listPortalCatalogBuildings, listPortalInspectionCandidates, portalBuildingIdForSource, publishPortalAsBuilt, resolvePortalArtifact, startPortalAsBuiltUpload, updatePortalCatalogBuilding, updatePortalInspectionStatuses } from "./portal/catalog";
 
 const cognito = new CognitoIdentityProviderClient({});
@@ -49,7 +51,7 @@ const LOGIN_MAX_AGE_SECONDS = 10 * 60;
 type Dependencies = Readonly<{
   service: Pick<ClientAuthService, "startLogin" | "finishLogin" | "authenticate" | "logout" | "establishVerifiedSession">;
   adminService?: Pick<ClientAuthService, "startLogin" | "finishLogin">;
-  ensureAdmin?: (input: { issuer: string; sub: string; organizationId: string; userId: string }) => Promise<unknown>;
+  completeAdminEnrollment?: (input: { issuer: string; sub: string; requestId: string }) => Promise<void>;
   portalOrigin: string;
   adminIssuer?: string;
   clientOauth?: CognitoClientOAuth;
@@ -185,27 +187,22 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
             ...(process.env.CLIENT_APP_CLIENT_ID ? { clientClientId: process.env.CLIENT_APP_CLIENT_ID } : {}),
             ...(process.env.CLIENT_APP_SECRET_ARN ? { clientSecretArn: process.env.CLIENT_APP_SECRET_ARN } : {}),
           });
+          if (result.kind === "admin-setup") return json(200, { setupRequired: true,
+            setupPath: `/bff/auth/admin/login?returnTo=${encodeURIComponent(safeReturnTo(body.returnTo))}` });
           if (result.kind === "mfa") return json(200, { mfa: true, session: result.session });
           if (result.kind === "new-password") return json(200, { newPassword: true, session: result.session });
           const oauth = result.admin ? dependencies.adminOauth : dependencies.clientOauth;
           if (!oauth) return json(401, { error: "sign_in_failed" });
           const verified = await oauth.verifyIssued(result.tokens);
           if (result.admin) {
-            if (!dependencies.ensureAdmin) return json(401, { error: "sign_in_failed" });
-            const userId = `adm${verified.sub.replace(/[^A-Za-z0-9]/g, "").slice(0, 20)}`;
-            await dependencies.ensureAdmin({
-              issuer: verified.issuer,
-              sub: verified.sub,
-              organizationId: PORTAL_ADMIN_ORGANIZATION_ID,
-              userId,
-            });
-            await grantPortalAdmin(PORTAL_ADMIN_ORGANIZATION_ID);
+            if (!dependencies.completeAdminEnrollment) return json(401, { error: "sign_in_failed" });
+            await dependencies.completeAdminEnrollment({ issuer: verified.issuer, sub: verified.sub, requestId: requestId(event) });
           }
           const started = await dependencies.service.startLogin(body.returnTo);
           const established = await dependencies.service.establishVerifiedSession({
             verified,
             tokens: result.tokens,
-            returnTo: body.returnTo && body.returnTo.startsWith("/") ? body.returnTo : "/projects",
+            returnTo: safeReturnTo(body.returnTo),
             requestId: requestId(event),
             state: started.state,
           });
@@ -344,15 +341,8 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
             loginCookie: loginCookie(event),
             requestId: requestId(event),
           }, async (verified) => {
-            const userId = `adm${verified.sub.replace(/[^A-Za-z0-9]/g, "").slice(0, 20)}`;
-            if (!dependencies.ensureAdmin) throw new Error("Admin identity store is not configured");
-            await dependencies.ensureAdmin({
-              issuer: verified.issuer,
-              sub: verified.sub,
-              organizationId: PORTAL_ADMIN_ORGANIZATION_ID,
-              userId,
-            });
-            await grantPortalAdmin(PORTAL_ADMIN_ORGANIZATION_ID);
+            if (!dependencies.completeAdminEnrollment) throw new Error("Admin identity store is not configured");
+            await dependencies.completeAdminEnrollment({ issuer: verified.issuer, sub: verified.sub, requestId: requestId(event) });
           });
         } catch (error) {
           if (error instanceof DomainError && error.code === "AUTHENTICATION_REQUIRED") {
@@ -629,8 +619,8 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
         if (method === "POST" && path === "/bff/portal/admins") {
           assertMutationRequest(event, dependencies.portalOrigin, active.session.csrfTokenHash);
           if (!admin) return json(403, { error: "forbidden" });
-          const payload = JSON.parse(event.body ?? "{}") as { email?: string };
-          return json(200, await createPortalAdmin(String(payload.email ?? "")));
+          const payload = administratorInviteRequestSchema.parse(JSON.parse(event.body ?? "{}"));
+          return json(200, await createPortalAdmin(payload.email, { adminId: active.identity.userId, sub: active.identity.sub, requestId: requestId(event) }, payload.resend));
         }
         if (method === "POST" && path === "/bff/portal/client-rename") {
           assertMutationRequest(event, dependencies.portalOrigin, active.session.csrfTokenHash);
@@ -646,7 +636,7 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
           const created = await createClientAccount({
             email: String(payload.email ?? ""),
             clientPrefix: String(payload.clientPrefix ?? ""),
-          });
+          }, { adminId: active.identity.userId, sub: active.identity.sub, requestId: requestId(event) });
           return json(200, created);
         }
         if (method === "GET" && path === "/bff/portal/client-users") {
@@ -658,7 +648,7 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
           assertMutationRequest(event, dependencies.portalOrigin, active.session.csrfTokenHash);
           if (!admin) return json(403, { error: "forbidden" });
           const payload = JSON.parse(event.body ?? "{}") as { email?: string; clientPrefix?: string };
-          await revokeClientUser(String(payload.clientPrefix || ""), String(payload.email || ""));
+          await revokeClientUser(String(payload.clientPrefix || ""), String(payload.email || ""), { adminId: active.identity.userId, sub: active.identity.sub, requestId: requestId(event) });
           return json(200, { ok: true });
         }
         if (method === "POST" && path === "/bff/portal/client-resend") {
@@ -672,7 +662,7 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
           assertMutationRequest(event, dependencies.portalOrigin, active.session.csrfTokenHash);
           if (!admin) return json(403, { error: "forbidden" });
           const payload = JSON.parse(event.body ?? "{}") as { email?: string; nextEmail?: string; clientPrefix?: string };
-          await replaceClientEmail(String(payload.clientPrefix || ""), String(payload.email || ""), String(payload.nextEmail || ""));
+          await replaceClientEmail(String(payload.clientPrefix || ""), String(payload.email || ""), String(payload.nextEmail || ""), { adminId: active.identity.userId, sub: active.identity.sub, requestId: requestId(event) });
           return json(200, { ok: true });
         }
         if (method === "GET" && path === "/bff/portal/how-to-read") {
@@ -1122,7 +1112,7 @@ export const handler: HttpHandler = async (event) => {
         ? { adminService: new ClientAuthService(store, cipher, adminOauth), adminOauth }
         : {}),
       ...(adminIssuer ? { adminIssuer } : {}),
-      ensureAdmin: (input) => store.ensurePortalAdmin(input),
+      completeAdminEnrollment: (input) => store.completeAdministratorEnrollment(input),
       resources: new ClientResourceService({ ...config, artifactSignerFunctionName }),
     });
   }

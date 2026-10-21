@@ -47,6 +47,8 @@ import {
 } from "@bdr/domain";
 import { z } from "zod";
 
+import { revokeClientAccess } from "../auth/client-revocation";
+
 import type { ActiveAdmin } from "../auth/admin";
 import { cognitoUserExists } from "../auth/cognito-user-pools";
 
@@ -301,22 +303,9 @@ export class AwsPortalAdminOperations implements PortalAdminOperations {
   }
 
   async revokeUser(organizationId: string, userId: string, input: { expectedRevision: string }, context: ActionContext) {
-    const user = await this.require(this.config.tables.tenantData, tenantKeys.user(organizationId, userId), versionedUserSchema);
-    if (user.status === "REVOKED") {
-      await this.revokeSubjectSessions(user.currentIssuer, user.currentSub);
-      await this.disableCognito(user.currentSub);
-      return user;
-    }
-    if (user.status !== "ACTIVE") invalidState("Cancel a pending invitation instead of revoking an invited user");
-    const next = { ...user, status: "REVOKED" as const, revision: revision() };
-    await this.transact([
-      this.update(this.config.tables.tenantData, tenantKeys.user(organizationId, userId), "SET #status = :revoked, revision = :next", "revision = :expected", { ":revoked": "REVOKED", ":next": next.revision, ":expected": input.expectedRevision }, { "#status": "status" }),
-      this.update(this.config.tables.identity, identityKeys.subject(user.currentIssuer, user.currentSub), "SET #status = :revoked", "organizationId = :organizationId AND userId = :userId", { ":revoked": "REVOKED", ":organizationId": organizationId, ":userId": userId }, { "#status": "status" }),
-      this.audit(context, organizationId, "USER_REVOKED", { userId }),
-    ]);
-    await this.revokeSubjectSessions(user.currentIssuer, user.currentSub);
-    await this.disableCognito(user.currentSub);
-    return next;
+    return revokeClientAccess({ identityTable: this.config.tables.identity, tenantTable: this.config.tables.tenantData,
+      sessionTable: this.config.tables.session, auditTable: this.config.tables.audit, clientPoolId: this.config.clientUserPoolId, clientIssuer: this.config.clientIssuer },
+      organizationId, userId, input.expectedRevision, { adminId: context.active.profile.adminId, sub: context.active.identity.sub, requestId: context.requestId }, this.dynamo, this.cognito);
   }
 
   async replaceIdentity(organizationId: string, userId: string, input: { email: string; expectedRevision: string; confirmedUserId: string; idempotencyKey: string }, context: ActionContext) {
@@ -575,22 +564,6 @@ export class AwsPortalAdminOperations implements PortalAdminOperations {
   private async disableCognito(username: string) {
     try { await this.cognito.send(new AdminUserGlobalSignOutCommand({ UserPoolId: this.config.clientUserPoolId, Username: username })); } catch { /* local revocation remains authoritative */ }
     try { await this.cognito.send(new AdminDisableUserCommand({ UserPoolId: this.config.clientUserPoolId, Username: username })); } catch { /* local revocation remains authoritative */ }
-  }
-
-  private async revokeSubjectSessions(issuer: string, sub: string) {
-    const subjectPk = identityKeys.subject(issuer, sub).PK;
-    const pointers = await this.queryAll(this.config.tables.session, subjectPk);
-    const activePointers = pointers.filter((item) => typeof item.sessionIdHash === "string" && item.revokedAt === null);
-    const revokedAt = new Date().toISOString();
-    for (let offset = 0; offset < activePointers.length; offset += 50) {
-      const actions: object[] = [];
-      for (const pointer of activePointers.slice(offset, offset + 50)) {
-        const sessionIdHash = String(pointer.sessionIdHash);
-        actions.push(this.update(this.config.tables.session, { PK: subjectPk, SK: String(pointer.SK) }, "SET revokedAt = :at", "revokedAt = :null", { ":at": revokedAt, ":null": null }));
-        actions.push(this.update(this.config.tables.session, { PK: `SESSION#${sessionIdHash}`, SK: "SESSION" }, "SET revokedAt = :at", "revokedAt = :null", { ":at": revokedAt, ":null": null }));
-      }
-      if (actions.length) await this.transact(actions);
-    }
   }
 
   private async writeProjectLifecycle(project: Versioned<Project>, expectedRevision: string, expectedStatus: string, context: ActionContext, action: string) {

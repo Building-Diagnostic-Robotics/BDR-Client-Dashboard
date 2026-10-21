@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { CognitoIdentityProviderClient, GetUserCommand } from "@aws-sdk/client-cognito-identity-provider";
+import { CognitoIdentityProviderClient, GetUserCommand, AdminListGroupsForUserCommand } from "@aws-sdk/client-cognito-identity-provider";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, GetCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
 import {
@@ -11,7 +11,7 @@ import {
   type AdminProfile,
   type AdminSession,
 } from "@bdr/contracts";
-import { auditExpiresAt, auditKeys, identityKeys, sessionKeys } from "@bdr/domain";
+import { assertActiveAdministratorGuard, auditExpiresAt, auditKeys, identityKeys, sessionKeys } from "@bdr/domain";
 
 import type { AdminAuthConfig, AdminAuthStore, AdminCognitoVerifier } from "./admin";
 
@@ -67,11 +67,24 @@ export class CognitoAdminVerifier implements AdminCognitoVerifier {
     if (sub !== input.expectedSub || !user.UserMFASettingList?.includes("SOFTWARE_TOKEN_MFA")) {
       throw new Error("Cognito administrator identity or TOTP enrollment is invalid");
     }
+    let next: string | undefined;
+    let member = false;
+    do {
+      const page = await cognito.send(new AdminListGroupsForUserCommand({ UserPoolId: required(process.env.ADMIN_USER_POOL_ID, "ADMIN_USER_POOL_ID"), Username: input.expectedSub, ...(next ? { NextToken: next } : {}) }));
+      member ||= (page.Groups ?? []).some((group) => group.GroupName === "bdr-admins");
+      next = page.NextToken;
+    } while (next);
+    if (!member) throw new Error("Administrator group required");
   }
 }
 
 export class DynamoAdminAuthStore implements AdminAuthStore {
   constructor(private readonly config: AdminRuntimeConfig) {}
+
+  async getActiveAdminCount(): Promise<number | null> {
+    const result = await dynamo.send(new GetCommand({ TableName: this.config.identityTableName, Key: identityKeys.adminGuard(), ConsistentRead: true }));
+    return typeof result.Item?.activeAdminCount === "number" ? result.Item.activeAdminCount : null;
+  }
 
   async getIdentity(issuer: string, sub: string): Promise<AdminIdentity | null> {
     const result = await dynamo.send(
@@ -113,11 +126,14 @@ export class DynamoAdminAuthStore implements AdminAuthStore {
     session: AdminSession;
     requestId: string;
   }): Promise<void> {
+    const count = await this.getActiveAdminCount();
+    assertActiveAdministratorGuard(count);
     const occurredAt = new Date().toISOString();
     const eventId = `event_${randomUUID()}`;
     await dynamo.send(
       new TransactWriteCommand({
         TransactItems: [
+          { ConditionCheck: { TableName: this.config.identityTableName, Key: identityKeys.adminGuard(), ConditionExpression: "activeAdminCount = :count", ExpressionAttributeValues: { ":count": count } } },
           {
             ConditionCheck: {
               TableName: this.config.identityTableName,
