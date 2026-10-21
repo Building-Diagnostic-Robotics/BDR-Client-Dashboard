@@ -193,8 +193,8 @@ Navigate to **Settings** → **Secrets and variables** → **Actions** → **New
 
 | Secret Name | Value |
 | --- | --- |
-| `AWS_DEV_ROLE_TO_ASSUME` | `arn:aws:iam::767397717805:role/BdrDashboard-GitHubActions-Dev` |
-| `AWS_PROD_ROLE_TO_ASSUME` | `arn:aws:iam::767397717805:role/BdrDashboard-GitHubActions-Prod` |
+| `AWS_DEV_DEPLOY_ROLE_ARN` (or `AWS_DEV_ROLE_TO_ASSUME`) | `arn:aws:iam::767397717805:role/bdr-client-dashboard-github-actions-dev` |
+| `AWS_PROD_DEPLOY_ROLE_ARN` (or `AWS_PROD_ROLE_TO_ASSUME`) | `arn:aws:iam::767397717805:role/bdr-client-dashboard-github-actions-prod` |
 | `NETLIFY_AUTH_TOKEN` | `<Your Netlify personal access token from Step 2.2>` |
 | `NETLIFY_SITE_ID` | `<Your Netlify site ID from Step 2.2>` |
 

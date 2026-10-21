@@ -80,7 +80,7 @@ jobs:
       - name: Configure AWS Credentials (GitHub OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_DEV_ROLE_TO_ASSUME }}
+          role-to-assume: ${{ secrets.AWS_DEV_DEPLOY_ROLE_ARN || secrets.AWS_DEV_ROLE_TO_ASSUME }}
           aws-region: us-east-1
 
       - name: Deploy Development CDK Stack
