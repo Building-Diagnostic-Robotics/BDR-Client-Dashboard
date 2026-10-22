@@ -4,6 +4,7 @@ History of this repository from `git log` (newest first). Merge commits are omit
 
 ## Unreleased
 
+- Fix Netlify CLI monorepo project resolution in production deployment workflow with `--filter @bdr/web`.
 - `6b697bf` Fix workspace-relative path resolution for CDK diff destructive changes inspection script in CI.
 - `5230f96` Add Playwright browser caching via `actions/cache@v4` with backoff retry resilience in GitHub Actions.
 - `9fb9530` Support both `AWS_DEV_DEPLOY_ROLE_ARN` and `AWS_DEV_ROLE_TO_ASSUME` secret aliases across all deployment workflows.
