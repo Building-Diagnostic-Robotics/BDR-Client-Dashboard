@@ -1,0 +1,117 @@
+name: Deploy Development
+
+on:
+  push:
+    branches:
+      - dev
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - '.gitignore'
+      - 'audit-findings.md'
+  workflow_dispatch:
+
+concurrency:
+  group: cdk-development
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  validate:
+    name: Validate Development
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck all workspaces
+        run: |
+          npm run typecheck
+          npm run typecheck:e2e
+
+      - name: Run unit & contract tests
+        run: npm run test
+
+      - name: Build all workspaces
+        run: npm run build
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+
+      - name: Install Playwright browsers
+        run: |
+          for i in 1 2 3; do
+            npx playwright install --with-deps chromium webkit && break || (echo "Retrying Playwright install in 5s (attempt $i)..." && sleep 5)
+          done
+
+      - name: Run local Playwright E2E suite
+        run: npm run test:e2e
+
+      - name: Synthesize Development CDK stack
+        run: npm run cdk:dev:synth
+
+  deploy-dev:
+    name: Deploy AWS Development Stack
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Configure AWS Credentials (GitHub OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEV_DEPLOY_ROLE_ARN || secrets.AWS_DEV_ROLE_TO_ASSUME }}
+          aws-region: us-east-1
+
+      - name: Deploy Development CDK Stack
+        run: npm run cdk:dev:deploy
+
+      - name: Post-Deployment Backend Health Check
+        run: |
+          OUTPUTS_FILE="packages/infrastructure/cdk-outputs.json"
+          if [ ! -f "$OUTPUTS_FILE" ]; then
+            echo "Error: CDK outputs file not found: $OUTPUTS_FILE"
+            exit 1
+          fi
+
+          CLIENT_BFF_URL=$(node -e "const data = require('./$OUTPUTS_FILE'); console.log(data['BdrClientPortal-development']?.ClientBffApiUrl || '');")
+          ADMIN_API_URL=$(node -e "const data = require('./$OUTPUTS_FILE'); console.log(data['BdrClientPortal-development']?.AdminApiUrl || '');")
+
+          echo "Verifying Client BFF: $CLIENT_BFF_URL/health"
+          curl -f --retry 5 --retry-delay 5 "$CLIENT_BFF_URL/health"
+          echo ""
+
+          echo "Verifying Admin API: $ADMIN_API_URL/health"
+          curl -f --retry 5 --retry-delay 5 "$ADMIN_API_URL/health"
+          echo ""
+          echo "Development stack deployed and verified successfully."

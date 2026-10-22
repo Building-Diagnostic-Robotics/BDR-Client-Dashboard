@@ -17,6 +17,12 @@
     "test:e2e:production": "PORTAL_E2E_MODE=live PORTAL_E2E_ENVIRONMENT=production node --env-file=.env.e2e.local node_modules/@playwright/test/cli.js test",
     "typecheck:e2e": "tsc --noEmit -p e2e/tsconfig.json",
     "synth": "npm run synth --workspace @bdr/infrastructure --",
+    "cdk:dev:synth": "npm run synth:dev --workspace @bdr/infrastructure",
+    "cdk:dev:diff": "npm run diff:dev --workspace @bdr/infrastructure",
+    "cdk:dev:deploy": "npm run deploy:dev --workspace @bdr/infrastructure",
+    "cdk:prod:synth": "npm run synth:prod --workspace @bdr/infrastructure",
+    "cdk:prod:diff": "npm run diff:prod --workspace @bdr/infrastructure",
+    "cdk:prod:deploy": "npm run deploy:prod --workspace @bdr/infrastructure",
     "check": "npm run typecheck && npm run test && npm run build"
   },
   "engines": {

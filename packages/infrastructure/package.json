@@ -11,6 +11,13 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "synth": "cdk synth --app 'tsx bin/app.ts'",
+    "synth:dev": "cdk synth BdrClientPortal-development --app 'tsx bin/app.ts' -c environment=development -c portalOrigin=http://localhost:3000 -c clientAuthDomainPrefix=bdr-client-dev-767397717805 -c adminAuthDomainPrefix=bdr-admin-dev-767397717805 -c adminCliCallbackUrl=http://127.0.0.1:8765/callback -c adminCliLogoutUrl=http://127.0.0.1:8765/logout",
+    "diff:dev": "cdk diff BdrClientPortal-development --app 'tsx bin/app.ts' -c environment=development -c portalOrigin=http://localhost:3000 -c clientAuthDomainPrefix=bdr-client-dev-767397717805 -c adminAuthDomainPrefix=bdr-admin-dev-767397717805 -c adminCliCallbackUrl=http://127.0.0.1:8765/callback -c adminCliLogoutUrl=http://127.0.0.1:8765/logout",
+    "deploy:dev": "cdk deploy BdrClientPortal-development --app 'tsx bin/app.ts' --require-approval never --outputs-file cdk-outputs.json -c environment=development -c portalOrigin=http://localhost:3000 -c clientAuthDomainPrefix=bdr-client-dev-767397717805 -c adminAuthDomainPrefix=bdr-admin-dev-767397717805 -c adminCliCallbackUrl=http://127.0.0.1:8765/callback -c adminCliLogoutUrl=http://127.0.0.1:8765/logout",
+    "synth:prod": "cdk synth BdrClientPortal-production --app 'tsx bin/app.ts' -c environment=production -c portalOrigin=https://bdrdashboard.netlify.app -c clientAuthDomainPrefix=bdr-client-prod-767397717805 -c adminAuthDomainPrefix=bdr-admin-prod-767397717805 -c adminCliCallbackUrl=http://127.0.0.1:8765/callback -c adminCliLogoutUrl=https://bdrdashboard.netlify.app/logged-out",
+    "diff:prod": "cdk diff BdrClientPortal-production --app 'tsx bin/app.ts' -c environment=production -c portalOrigin=https://bdrdashboard.netlify.app -c clientAuthDomainPrefix=bdr-client-prod-767397717805 -c adminAuthDomainPrefix=bdr-admin-prod-767397717805 -c adminCliCallbackUrl=http://127.0.0.1:8765/callback -c adminCliLogoutUrl=https://bdrdashboard.netlify.app/logged-out",
+    "deploy:prod": "cdk deploy BdrClientPortal-production --app 'tsx bin/app.ts' --require-approval never --outputs-file cdk-outputs.json -c environment=production -c portalOrigin=https://bdrdashboard.netlify.app -c clientAuthDomainPrefix=bdr-client-prod-767397717805 -c adminAuthDomainPrefix=bdr-admin-prod-767397717805 -c adminCliCallbackUrl=http://127.0.0.1:8765/callback -c adminCliLogoutUrl=https://bdrdashboard.netlify.app/logged-out",
+    "check-diff": "tsx bin/check-cdk-diff.ts",
     "audit-authentication-state": "tsx bin/audit-authentication-state.ts",
     "reconcile-authentication-state": "tsx bin/reconcile-authentication-state.ts"
   },

@@ -7,6 +7,7 @@ V1 registry publication remains available through the TOTP-protected `portal-adm
 ## Documentation
 
 - [Changelog](./CHANGELOG.md)
+- [CI/CD & Deployment Architecture](./docs/ci-cd.md): GitHub Actions workflows, OIDC security, and coordinated deployments
 - [Frontend](./docs/frontend.md): Next.js dashboard, routes, and session handling
 - [Backend](./docs/backend.md): Lambda handlers, authentication, and the two client data paths
 - [Architecture](./docs/architecture.md)
@@ -15,7 +16,17 @@ V1 registry publication remains available through the TOTP-protected `portal-adm
 - [Current plan and roadmap](./plan.md)
 - [Runbooks](./docs/runbooks/)
 
-## Development
+## Development & Deployment
+
+The repository uses a dual-branch deployment strategy orchestrated via GitHub Actions:
+
+- **`dev`**: Active development branch. Merges to `dev` automatically deploy the AWS development stack (`BdrClientPortal-development`).
+- **`main`**: Production branch. Merging a PR from `dev` to `main` runs CDK diff inspection, executes the hybrid deployment (auto-deploying routine updates or pausing for manual operator approval on destructive stateful changes), deploys AWS, and publishes the Netlify frontend.
+- **Feature branches**: Feature and fix branches branch from `dev` and run automated CI testing on push and PR.
+
+See [CI/CD & Deployment Architecture](./docs/ci-cd.md) and the [Deployment Runbook](./docs/runbooks/github-actions-deployment.md) for complete details.
+
+Local setup:
 
 ```bash
 npm install

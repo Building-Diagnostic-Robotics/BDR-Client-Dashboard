@@ -4,7 +4,11 @@ History of this repository from `git log` (newest first). Merge commits are omit
 
 ## Unreleased
 
-- Speed up administrator Clients rendering with a lightweight linked-client directory, separately loaded physical-building counts, and selected-client reads. Replace Review's full-detail aggregation with bounded status-only reads across all inspections, explicit partial failures/retries, shared response contracts, and complete discovery pagination. Add regression coverage and [operator validation instructions](./docs/runbooks/admin-performance.md); validation and deployment remain operator-run.
+- `6b697bf` Fix workspace-relative path resolution for CDK diff destructive changes inspection script in CI.
+- `5230f96` Add Playwright browser caching via `actions/cache@v4` with backoff retry resilience in GitHub Actions.
+- `9fb9530` Support both `AWS_DEV_DEPLOY_ROLE_ARN` and `AWS_DEV_ROLE_TO_ASSUME` secret aliases across all deployment workflows.
+- `5d2e458` Implement comprehensive GitHub Actions CI/CD automation: quality gates on feature branches, automated development deployments on `dev` via AWS OIDC, PR CDK diff checks, and coordinated AWS + Netlify production releases with hybrid destructive-change approval gates ([docs/ci-cd.md](./docs/ci-cd.md), [runbook](./docs/runbooks/github-actions-deployment.md)).
+- `4143ebf` Speed up administrator Clients rendering with a lightweight linked-client directory, separately loaded physical-building counts, and selected-client reads. Replace Review's full-detail aggregation with bounded status-only reads across all inspections, explicit partial failures/retries, shared response contracts, and complete discovery pagination. Add regression coverage and [operator validation instructions](./docs/runbooks/admin-performance.md); validation and deployment remain operator-run.
 - `74d363e` Harden administrator authorization and client revocation, add portal administrator invitations with MFA onboarding, enforce invitation email ownership, and add authentication audit/reconciliation tooling ([security rollout](./docs/runbooks/authentication-security-rollout.md), [reconciliation runbook](./docs/runbooks/authentication-reconciliation.md)).
 - `53eaa62` Refine client building detail view UI: navigation chevron, compact heading, outline download buttons, and card-wide click-to-expand affordance ([docs/frontend.md](./docs/frontend.md)).
 - `d7dd023` Add operator setup command for sample dashboard previews, isolated test folders, and audited client resets.

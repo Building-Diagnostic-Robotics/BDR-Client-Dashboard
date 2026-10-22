@@ -1,0 +1,89 @@
+name: PR Release Gate (dev -> main)
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - '.gitignore'
+      - 'audit-findings.md'
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  validate-and-diff:
+    name: Validate Quality Gate & CDK Diff
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck all workspaces
+        run: |
+          npm run typecheck
+          npm run typecheck:e2e
+
+      - name: Run unit & contract tests
+        run: npm run test
+
+      - name: Build all workspaces
+        run: npm run build
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+
+      - name: Install Playwright browsers
+        run: |
+          for i in 1 2 3; do
+            npx playwright install --with-deps chromium webkit && break || (echo "Retrying Playwright install in 5s (attempt $i)..." && sleep 5)
+          done
+
+      - name: Run local Playwright E2E suite
+        run: npm run test:e2e
+
+      - name: Synthesize Production CDK Stack
+        run: npm run cdk:prod:synth
+
+      - name: Configure AWS Credentials (GitHub OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_PROD_DEPLOY_ROLE_ARN || secrets.AWS_PROD_ROLE_TO_ASSUME }}
+          aws-region: us-east-1
+
+      - name: Run CDK Diff for Production
+        id: cdk_diff
+        run: |
+          npm run cdk:prod:diff > cdk-diff.txt 2>&1 || true
+          cat cdk-diff.txt
+
+      - name: Inspect CDK Diff for Destructive Changes
+        id: check_diff
+        run: |
+          npm run check-diff --workspace @bdr/infrastructure -- --file ${{ github.workspace }}/cdk-diff.txt
+
+      - name: Append Diff to Step Summary
+        run: |
+          echo "### Production CDK Infrastructure Diff" >> $GITHUB_STEP_SUMMARY
+          echo '```diff' >> $GITHUB_STEP_SUMMARY
+          tail -n 200 cdk-diff.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY

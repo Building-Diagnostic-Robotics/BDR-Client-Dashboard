@@ -1,0 +1,10 @@
+# Netlify Configuration for BDR Client Dashboard
+# Note: Netlify deployment is coordinated via GitHub Actions so that AWS CDK backend
+# updates deploy and pass health checks before the frontend is published.
+
+[build]
+  base = "apps/web"
+  publish = ".next"
+  command = "npm run build"
+  # Ignore automatic git triggers on main so GitHub Actions coordinates the deployment order
+  ignore = "git diff --quiet HEAD^ HEAD ."
