@@ -32,6 +32,16 @@ Key shared-portal architecture rules:
 - **Organization How to Read Restoration:** Landing page banner on `/projects` and session-derived download endpoints.
 - **Validation Baselines:** Strict TypeScript compiler errors in `@bdr/services` resolved and Playwright browser fixtures updated.
 
+### Automated CI/CD & Coordinated Deployment Pipeline
+
+Implemented in `5d2e458` and validated live on `dev` and pull request release gates (`9fb9530`, `5230f96`, `6b697bf`). See [docs/ci-cd.md](./docs/ci-cd.md) and [github-actions-deployment.md](./docs/runbooks/github-actions-deployment.md).
+
+- **Dual-Branch Pipeline:** Dedicated `dev` branch auto-deploys `BdrClientPortal-development` upon push; pull requests into `main` run full CI quality gates and production `cdk diff` checks.
+- **GitHub OIDC Authentication:** AWS authentication is fully tokenized via IAM OpenID Connect (`bdr-client-dashboard-github-actions-dev` and `bdr-client-dashboard-github-actions-prod`) without permanent IAM credentials stored in GitHub.
+- **Hybrid Production Deployment Policy:** Routine updates (frontend UI, Lambda logic, non-destructive infrastructure) auto-deploy to production on merge to `main`. Destructive modifications to stateful resources (DynamoDB, Cognito, KMS, S3) are detected via automated diff parsing and routed to the `production-approval` GitHub environment for mandatory operator click review.
+- **Coordinated Rollout:** Production AWS backend deploys and validates `/health` first; Netlify then builds and publishes the Next.js frontend, followed by verification of the `/bff/auth/session` proxy rewrite. Netlify's automatic git webhooks are decoupled via `netlify.toml` ignore directives.
+- **Zero-Side-Effect Health Checks:** Automated deployment verification exercises zero-side-effect health and unauthenticated session routes, avoiding live Cognito test session churn during deployments.
+
 ### Completed Security Fixes
 
 Implemented in `74d363e`. Development and production authentication reconciliation was performed; the operator reported a clean production audit, successful client/admin sign-in, and a passing production authentication suite.

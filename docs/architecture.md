@@ -50,6 +50,14 @@ Development and production are deployed as separate CDK stacks in `us-east-1`. E
 > [!WARNING]
 > While portal-managed infrastructure is fully isolated between development and production, the operational data bucket `DATA_BUCKET_NAME` (`bdr-roofus-uploads`) is currently **shared** across both environments. Bucket parameterization and isolated dev data storage are deliberately deferred pending coordination with the ReportGen owner. Mutations performed in the development stack directly affect shared-building files in production.
 
+### Deployment & Automation
+
+Testing and deployments are automated through GitHub Actions using GitHub OpenID Connect (OIDC) without permanent AWS access keys.
+- **Development:** Merges to `dev` auto-deploy `BdrClientPortal-development` and verify `/health`.
+- **Production:** Merges to `main` auto-deploy routine updates (UI, Lambdas, non-destructive infra) or pause for manual operator approval (`production-approval` environment) when stateful resources (DynamoDB, Cognito, KMS, S3) are flagged in `cdk diff`.
+- **Coordinated Rollout:** The AWS backend deploys and validates `/health` first; Netlify then builds and publishes the frontend (`https://bdrdashboard.netlify.app`), followed by verification of the `/bff/auth/session` proxy rewrite.
+- Detailed architecture: [docs/ci-cd.md](./ci-cd.md); operational runbook: [github-actions-deployment.md](./runbooks/github-actions-deployment.md).
+
 ## Domain and visibility model
 
 ```text
