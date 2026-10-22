@@ -79,7 +79,7 @@ jobs:
       - name: Inspect CDK Diff for Destructive Changes
         id: check_diff
         run: |
-          npm run check-diff --workspace @bdr/infrastructure -- --file cdk-diff.txt
+          npm run check-diff --workspace @bdr/infrastructure -- --file ${{ github.workspace }}/cdk-diff.txt
 
       - name: Append Diff to Step Summary
         run: |

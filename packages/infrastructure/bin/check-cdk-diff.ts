@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { readFileSync, appendFileSync } from "node:fs";
+import { readFileSync, appendFileSync, existsSync } from "node:fs";
+import { resolve } from "node:path";
 
 type StatefulResource = {
   type: string;
@@ -77,7 +78,15 @@ function main() {
 
   const fileArgIndex = args.indexOf("--file");
   if (fileArgIndex !== -1 && args[fileArgIndex + 1]) {
-    diffContent = readFileSync(args[fileArgIndex + 1]!, "utf-8");
+    const rawPath = args[fileArgIndex + 1]!;
+    const candidatePaths = [
+      rawPath,
+      resolve(process.cwd(), rawPath),
+      resolve(process.env.INIT_CWD || process.cwd(), rawPath),
+      resolve(process.cwd(), "..", "..", rawPath),
+    ];
+    const targetPath = candidatePaths.find((p) => existsSync(p)) || candidatePaths[0];
+    diffContent = readFileSync(targetPath!, "utf-8");
   } else if (!process.stdin.isTTY) {
     try {
       diffContent = readFileSync(0, "utf-8");
