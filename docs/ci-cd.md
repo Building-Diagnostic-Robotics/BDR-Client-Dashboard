@@ -106,7 +106,7 @@ All workflow files reside in `.github/workflows/`:
      - Dynamically targets environment `production` (routine) or `production-approval` (destructive).
      - Deploys AWS CDK production stack (`npm run cdk:prod:deploy`).
      - Verifies backend `/health` endpoints.
-     - Publishes Netlify frontend via `npx netlify deploy --build --prod`.
+     - Publishes Netlify frontend via `npx --yes netlify deploy --build --prod --filter @bdr/web`.
      - Verifies frontend reachability and the `/bff/auth/session` proxy rewrite.
 
 ---

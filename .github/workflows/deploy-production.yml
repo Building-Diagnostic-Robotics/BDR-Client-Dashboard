@@ -166,10 +166,10 @@ jobs:
 
       - name: 3. Publish Netlify Frontend
         run: |
-          npx netlify deploy \
+          npx --yes netlify deploy \
             --build \
             --prod \
-            --dir=apps/web \
+            --filter @bdr/web \
             --auth="${{ secrets.NETLIFY_AUTH_TOKEN }}" \
             --site="${{ secrets.NETLIFY_SITE_ID }}"
 
