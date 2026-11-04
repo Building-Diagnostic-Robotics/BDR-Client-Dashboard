@@ -164,7 +164,11 @@ jobs:
           curl -f --retry 5 --retry-delay 5 "$ADMIN_API_URL/health"
           echo ""
 
+          echo "CLIENT_BFF_API_URL=$CLIENT_BFF_URL" >> $GITHUB_ENV
+
       - name: 3. Publish Netlify Frontend
+        env:
+          CLIENT_BFF_API_URL: ${{ env.CLIENT_BFF_API_URL }}
         run: |
           npx --yes netlify deploy \
             --build \
@@ -176,17 +180,19 @@ jobs:
       - name: 4. Post-Deployment End-to-End Verification
         run: |
           echo "Verifying Netlify Frontend reachability..."
-          curl -f -I --retry 5 --retry-delay 5 "https://bdrdashboard.netlify.app"
+          curl -f -L -I --retry 5 --retry-delay 5 "https://bdrdashboard.netlify.app"
           echo ""
 
           echo "Verifying Netlify rewrite to Client BFF Lambda (/bff/auth/session)..."
-          SESSION_RESPONSE=$(curl -s -f --retry 5 --retry-delay 5 "https://bdrdashboard.netlify.app/bff/auth/session")
-          echo "Session response: $SESSION_RESPONSE"
+          HTTP_STATUS=$(curl -s -o /tmp/session-response.json -w "%{http_code}" --retry 5 --retry-delay 5 "https://bdrdashboard.netlify.app/bff/auth/session")
+          SESSION_BODY=$(cat /tmp/session-response.json)
+          echo "HTTP Status: $HTTP_STATUS"
+          echo "Response Body: $SESSION_BODY"
 
-          # Verify response contains valid session JSON
-          echo "$SESSION_RESPONSE" | grep -q "authenticated" || {
-            echo "Error: Unexpected response from /bff/auth/session via Netlify rewrite."
+          # Verify rewrite reached Client BFF (returns 401 authentication_required when unauthenticated)
+          if [ "$HTTP_STATUS" != "401" ] || ! echo "$SESSION_BODY" | grep -q "authentication_required"; then
+            echo "Error: Unexpected response from /bff/auth/session via Netlify rewrite. Expected 401 with authentication_required."
             exit 1
-          }
+          fi
 
           echo "✅ Production deployment and end-to-end verification succeeded."
