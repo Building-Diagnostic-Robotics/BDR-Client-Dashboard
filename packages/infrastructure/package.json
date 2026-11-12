@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "transfer-client-organization": "tsx bin/transfer-client-organization.ts",
+    "publish-manual-reports": "tsx bin/publish-manual-reports.ts",
     "setup-sample-dashboard": "tsx bin/setup-sample-dashboard.ts",
     "audit-email-overlap": "node bin/audit-cognito-email-overlap.mjs",
     "brand-client-login": "node bin/brand-client-login.mjs",

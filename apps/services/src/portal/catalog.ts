@@ -29,20 +29,21 @@ import {
   linkedPrefixesForOrganization,
   listLinkedClients,
   listPortalBuildings,
-  loadPortalStatus,
   loadPortalReportStatus,
   normalizePortalTimestamp,
   portalObjectMetadata,
+  portalReportGeneratedAt,
   portalSourceId,
   provisionalPortalBuildingId,
   provisionalPortalInspectionId,
   reportFileMatches,
   resolvePortalArtifactSource,
   signedUpload,
+  summary,
   type PortalBuilding,
   type PortalSourceInspection,
 } from "./buildings";
-import { mapConcurrent, type PortalReadContext } from "./read-context";
+import { createPortalReadContext, mapConcurrent, type PortalReadContext } from "./read-context";
 import { reportDownloadFilename } from "./artifact-filenames";
 
 const REPORT_ORDER: readonly PortalReportType[] = [
@@ -82,7 +83,7 @@ type StoredInspection = {
   asBuilt: AsBuiltArtifact | null;
 };
 
-type StoredBuilding = {
+export type StoredBuilding = {
   PK: string;
   SK: string;
   entityType: "PORTAL_BUILDING";
@@ -305,25 +306,27 @@ async function resolveBuilding(
   organizationId: string,
   buildingId: string,
   includeHidden = false,
+  context = createPortalReadContext(),
 ): Promise<ResolvedBuilding> {
-  const result = await document.send(new GetCommand({
+  context.dynamoReadCount++;
+  const result = await context.run(() => document.send(new GetCommand({
     TableName: table(),
     Key: tenantKeys.portalBuilding(organizationId, buildingId),
     ConsistentRead: true,
-  }));
+  })));
   if (result.Item && isStoredBuilding(result.Item)) {
     if (includeHidden || result.Item.clientVisible) return { item: result.Item, provisional: false };
     const item = result.Item;
-    const inspectionViews = await Promise.all(sortInspections(item.inspections).map((inspection) => inspectionView(inspection, item)));
+    const inspectionViews = await mapConcurrent(sortInspections(item.inspections), 4, (inspection) => inspectionView(inspection, item, context));
     if (!inspectionViews.some((inspection) => inspection.availableReportTypes.length > 0)) notFound();
     return { item: result.Item, provisional: false, inspectionViews };
   }
 
-  const prefixes = includeHidden ? await linkedPrefixesForOrganization(organizationId) : undefined;
-  const legacy = await listPortalBuildings(organizationId, includeHidden, prefixes);
+  const prefixes = includeHidden ? await linkedPrefixesForOrganization(organizationId, context) : undefined;
+  const legacy = await listPortalBuildings(organizationId, includeHidden, prefixes, context);
   const row = legacy.find((candidate) => provisionalPortalBuildingId(candidate.buildingPrefix) === buildingId);
   if (!row) notFound();
-  const source = await inspectPortalSource(row.buildingPrefix);
+  const source = await inspectPortalSource(row.buildingPrefix, context);
   return { item: provisionalItem(organizationId, row, source), provisional: true };
 }
 
@@ -363,13 +366,14 @@ function publishedArtifact(
   return { key, filename: reportDownloadFilename(building.displayName, type), contentType: "application/pdf" };
 }
 
-async function reportView(inspection: StoredInspection, building: StoredBuilding, context?: PortalReadContext): Promise<{ reports: PortalReport[]; artifacts: Map<PortalReportType, ResolvedArtifact> }> {
-  const status = context ? await loadPortalReportStatus(inspection.sourcePrefix, context) : await loadPortalStatus(inspection.sourcePrefix);
+async function reportView(inspection: StoredInspection, building: StoredBuilding, context: PortalReadContext): Promise<{ reports: PortalReport[]; artifacts: Map<PortalReportType, ResolvedArtifact> }> {
+  // Catalog responses need publication state, never scan manifests or operational enrichment.
+  const status = await loadPortalReportStatus(inspection.sourcePrefix, context);
   const sourceReports = status.reports && typeof status.reports === "object"
     ? status.reports as Record<string, Record<string, unknown>>
     : {};
   const artifacts = new Map<PortalReportType, ResolvedArtifact>();
-  const reports = REPORT_ORDER.map((type): PortalReport => {
+  const reports = await mapConcurrent(REPORT_ORDER, 4, async (type): Promise<PortalReport> => {
     const artifact = publishedArtifact(building, inspection, type, status);
     if (artifact) artifacts.set(type, artifact);
     if (type === "AS_BUILT") {
@@ -390,10 +394,11 @@ async function reportView(inspection: StoredInspection, building: StoredBuilding
     }
     const sourceReport = sourceReports[reportKey(type)];
     const available = artifact !== null;
-    const publishedAtValue = sourceReport?.generatedAt
-      ?? sourceReport?.reportgenApprovedAt
-      ?? sourceReport?.clientApprovedAt
-      ?? sourceReport?.approvedAt;
+    // Match operational timestamp precedence, with a metadata-only HEAD fallback
+    // for published files whose older status records lack timestamps.
+    const publishedAtValue = available && sourceReport
+      ? await portalReportGeneratedAt(sourceReport, context) ?? sourceReport.approvedAt
+      : null;
     const publishedAt = normalizePortalTimestamp(publishedAtValue, inspection.timeZone);
     return {
       reportType: type,
@@ -405,7 +410,7 @@ async function reportView(inspection: StoredInspection, building: StoredBuilding
   return { reports, artifacts };
 }
 
-async function inspectionView(inspection: StoredInspection, building: StoredBuilding, context?: PortalReadContext): Promise<PortalInspection> {
+async function inspectionView(inspection: StoredInspection, building: StoredBuilding, context: PortalReadContext): Promise<PortalInspection> {
   const { reports } = await reportView(inspection, building, context);
   const available = reports.filter((report) => report.deliveryStatus === "AVAILABLE");
   const dates = available.map((report) => report.publishedAt).filter((value): value is string => Boolean(value)).sort();
@@ -439,9 +444,9 @@ function sortInspections(inspections: readonly StoredInspection[]): StoredInspec
   });
 }
 
-async function detailFromResolved(resolved: ResolvedBuilding): Promise<PortalBuildingDetail> {
+async function detailFromResolved(resolved: ResolvedBuilding, context = createPortalReadContext()): Promise<PortalBuildingDetail> {
   const ordered = sortInspections(resolved.item.inspections);
-  const inspections = resolved.inspectionViews ?? await Promise.all(ordered.map((inspection) => inspectionView(inspection, resolved.item)));
+  const inspections = resolved.inspectionViews ?? await mapConcurrent(ordered, 4, (inspection) => inspectionView(inspection, resolved.item, context));
   return {
     buildingId: resolved.item.buildingId,
     displayName: resolved.item.displayName,
@@ -458,7 +463,7 @@ async function detailFromResolved(resolved: ResolvedBuilding): Promise<PortalBui
 async function storedSummary(
   item: StoredBuilding,
   includeHidden: boolean,
-  context?: PortalReadContext,
+  context: PortalReadContext,
 ): Promise<PortalBuildingSummary | null> {
   const ordered = sortInspections(item.inspections);
   const latest = ordered[0] ? await inspectionView(ordered[0], item, context) : null;
@@ -466,7 +471,7 @@ async function storedSummary(
     || item.clientVisible
     || Boolean(latest?.availableReportTypes.length);
   if (!visible && ordered.length > 1) {
-    const previous = await Promise.all(ordered.slice(1).map((inspection) => inspectionView(inspection, item)));
+    const previous = await mapConcurrent(ordered.slice(1), 4, (inspection) => inspectionView(inspection, item, context));
     visible = previous.some((inspection) => inspection.availableReportTypes.length > 0);
   }
   if (!visible) return null;
@@ -494,7 +499,7 @@ async function storedSummary(
   };
 }
 
-async function portalCatalogState(organizationId: string, includeHidden = false, context?: PortalReadContext, clientPrefixes?: readonly string[]): Promise<{
+async function portalCatalogState(organizationId: string, includeHidden = false, context = createPortalReadContext(), clientPrefixes?: readonly string[]): Promise<{
   items: PortalBuildingSummary[];
   sourcePrefixes: Map<string, string>;
 }> {
@@ -515,7 +520,7 @@ async function portalCatalogState(organizationId: string, includeHidden = false,
   )));
   const explicit = (await mapConcurrent(buildings, 4, (item) => storedSummary(item, includeHidden, context)))
     .filter((item): item is PortalBuildingSummary => item !== null);
-  const prefixes = clientPrefixes ?? (includeHidden ? await linkedPrefixesForOrganization(organizationId) : undefined);
+  const prefixes = clientPrefixes ?? (includeHidden ? await linkedPrefixesForOrganization(organizationId, context) : undefined);
   const legacy = await listPortalBuildings(organizationId, includeHidden, prefixes, context);
   const provisionalRows = legacy.filter((row) => !claimedSources.has(portalSourceId(row.buildingPrefix)));
   const globalClaims = await sourceClaims(provisionalRows.map((row) => row.buildingPrefix), context);
@@ -576,13 +581,14 @@ export async function listPortalAdminCatalogBuildings(): Promise<Array<PortalBui
   readyReports: PortalReportType[];
   latestReportUpdate: string | null;
 }>> {
+  const context = createPortalReadContext();
   const clients = await listLinkedClients();
   const byOrganization = new Map<string, string>();
   for (const client of clients) {
     if (!byOrganization.has(client.organizationId)) byOrganization.set(client.organizationId, client.clientPrefix);
   }
-  const groups = await Promise.all([...byOrganization].map(async ([organizationId, clientPrefix]) => {
-    const catalog = await portalCatalogState(organizationId, true);
+  const groups = await mapConcurrent([...byOrganization], 4, async ([organizationId, clientPrefix]) => {
+    const catalog = await portalCatalogState(organizationId, true, context);
     return catalog.items.map((building) => ({
       ...building,
       buildingPrefix: catalog.sourcePrefixes.get(building.buildingId) ?? `${clientPrefix}/`,
@@ -592,7 +598,7 @@ export async function listPortalAdminCatalogBuildings(): Promise<Array<PortalBui
       readyReports: building.latestInspection?.availableReportTypes ?? [],
       latestReportUpdate: building.latestInspection?.latestReportUpdate ?? null,
     }));
-  }));
+  });
   return groups.flat();
 }
 
@@ -601,7 +607,8 @@ export async function getPortalCatalogBuilding(
   buildingId: string,
   includeHidden = false,
 ): Promise<PortalBuildingDetail> {
-  return detailFromResolved(await resolveBuilding(organizationId, buildingId, includeHidden));
+  const context = createPortalReadContext();
+  return detailFromResolved(await resolveBuilding(organizationId, buildingId, includeHidden, context), context);
 }
 
 export async function portalBuildingIdForSource(
@@ -629,6 +636,17 @@ async function saveBuilding(
   target: Record<string, string>,
 ): Promise<StoredBuilding> {
   const next = { ...item, revision: randomUUID(), updatedAt: new Date().toISOString() };
+  return commitPreparedPortalBuilding(next, expectedRevision, audit, target);
+}
+
+/** Operator workflows persist this exact candidate before committing, allowing safe recovery after an uncertain response. */
+export async function commitPreparedPortalBuilding(
+  next: StoredBuilding,
+  expectedRevision: string | null,
+  audit: PortalCatalogMutationContext,
+  target: Record<string, string>,
+): Promise<StoredBuilding> {
+  if (expectedRevision === null) return materialize(next, audit, target);
   try {
     await document.send(new TransactWriteCommand({
       TransactItems: [
@@ -640,7 +658,7 @@ async function saveBuilding(
             ExpressionAttributeValues: { ":expected": expectedRevision },
           },
         },
-        auditWrite(item.organizationId, audit, target),
+        auditWrite(next.organizationId, audit, target),
       ],
     }));
   } catch (error) {
@@ -648,6 +666,24 @@ async function saveBuilding(
     throw error;
   }
   return next;
+}
+
+/** Prepare a hidden catalog record from real source metadata; never invent scan completion evidence. */
+export async function prepareManualPortalBuilding(
+  organizationId: string,
+  sourcePrefix: string,
+  displayName: string,
+): Promise<StoredBuilding> {
+  const source = await inspectPortalSource(sourcePrefix);
+  const linked = await linkedPrefixesForOrganization(organizationId);
+  if (!linked.includes(source.clientPrefix)) notFound();
+  const status = await loadPortalReportStatus(source.prefix);
+  const scans = source.sections.map((section) => section.scannedAt).filter((date): date is string => date !== null).sort();
+  const uploads = source.sections.map((section) => section.uploadCompletedAt).sort();
+  const row = summary(source.prefix, { ...status, displayName: source.displayName, address: source.address,
+    scanTime: status.scanTime ?? scans[0] ?? null, uploadTime: status.uploadTime ?? uploads.at(-1) ?? null,
+    timeZone: source.timeZone, reports: {}, released: false, legacyVisible: false });
+  return { ...provisionalItem(organizationId, row, source), displayName: displayName.trim(), clientVisible: false };
 }
 
 async function materialize(
@@ -861,8 +897,30 @@ export async function publishPortalAsBuilt(
   if (metadata.sizeBytes !== input.sizeBytes || metadata.contentType !== input.contentType) throw new Error("invalid_request");
   const resolved = await resolveBuilding(organizationId, buildingId, true);
   if (resolved.provisional || resolved.item.revision !== input.expectedRevision) conflict();
+  const prepared = portalBuildingWithAsBuilt(resolved.item, inspectionId, input, new Date().toISOString());
+  const next = await saveBuilding(
+    prepared,
+    input.expectedRevision,
+    audit,
+    { buildingId, inspectionId, uploadId: input.uploadId },
+  );
+  return detailFromResolved({ item: next, provisional: false });
+}
+
+/** Shared pointer preparation. Callers must verify the private object's bytes/type before committing. */
+export function portalBuildingWithAsBuilt(
+  building: StoredBuilding,
+  inspectionId: string,
+  input: { uploadId: string; key: string; filename: string; contentType: string; sizeBytes: number },
+  publishedAt: string,
+): StoredBuilding {
+  const extension = input.contentType === "application/pdf" ? "pdf" : input.contentType === "image/png" ? "png" : input.contentType === "image/jpeg" ? "jpg" : null;
+  const expectedKey = `reportgen_portal/as-built/${building.organizationId}/${building.buildingId}/${inspectionId}/drafts/${input.uploadId}/as-built.${extension}`;
+  if (!extension || !/^upl_[a-f0-9]{32}$/.test(input.uploadId) || input.key !== expectedKey
+    || !Number.isInteger(input.sizeBytes) || input.sizeBytes <= 0 || input.sizeBytes > 50 * 1024 * 1024
+    || !Number.isFinite(Date.parse(publishedAt))) throw new Error("invalid_request");
   let found = false;
-  const inspections = resolved.item.inspections.map((inspection) => {
+  const inspections = building.inspections.map((inspection) => {
     if (inspection.inspectionId !== inspectionId) return inspection;
     found = true;
     return {
@@ -872,18 +930,12 @@ export async function publishPortalAsBuilt(
         filename: input.filename,
         contentType: input.contentType,
         sizeBytes: input.sizeBytes,
-        publishedAt: new Date().toISOString(),
+        publishedAt,
       },
     };
   });
   if (!found) notFound();
-  const next = await saveBuilding(
-    { ...resolved.item, inspections },
-    input.expectedRevision,
-    audit,
-    { buildingId, inspectionId, uploadId: input.uploadId },
-  );
-  return detailFromResolved({ item: next, provisional: false });
+  return { ...building, inspections };
 }
 
 export async function resolvePortalArtifact(

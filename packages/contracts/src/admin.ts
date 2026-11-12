@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "./zod";
 
 import { ianaTimeZoneSchema, opaqueIdSchema, reportDeliveryStatusSchema } from "./models";
 

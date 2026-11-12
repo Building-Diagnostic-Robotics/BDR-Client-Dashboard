@@ -150,12 +150,13 @@ function errorResponse(
     );
   }
   if (error instanceof ZodError) return json(400, { error: "invalid_request" });
+  const id = requestId(event);
   console.error(JSON.stringify({
-    requestId: requestId(event),
+    requestId: id,
     error: "client_bff_failure",
     ...(error instanceof Error ? { errorName: error.name, errorMessage: error.message } : {}),
   }));
-  return json(500, { error: "internal_error" });
+  return json(500, { error: "internal_error" }, { headers: { "x-request-id": id } });
 }
 
 export function createClientBffHandler(dependencies: Dependencies): HttpHandler {

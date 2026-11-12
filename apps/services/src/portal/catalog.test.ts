@@ -105,6 +105,7 @@ describe("fresh catalog artifact resolution", () => {
   });
 
   it("uses the same friendly filename in catalog detail", async () => {
+    mockStatus(publishedStatus());
     const detail = await getPortalCatalogBuilding("org-client", buildingId);
     expect(detail.latestInspection?.reports.find((report) => report.reportType === "ASSESSMENT")?.filename)
       .toBe("Midland Business Park - Roof Assessment.pdf");

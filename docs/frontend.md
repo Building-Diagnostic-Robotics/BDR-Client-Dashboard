@@ -49,6 +49,10 @@ The shell shows a different nav for portal administrators (`me.admin`): Clients,
 
 Security headers in `next.config.ts` enforce Content Security Policy (CSP), `nosniff`, `DENY` framing, and locked-down permissions policies.
 
+Shared contract schemas initialize Zod with `jitless: true` in browsers before schema construction. This avoids Zod's caught eval capability probe and its CSP warning while preserving strict response validation. Server configuration is unchanged; production `script-src` still excludes `unsafe-eval`. A CSP console message alone does not establish why projects failed: inspect `/bff/portal/buildings` status/response and correlate server errors with request IDs. The optional How to Read endpoint's `404` is an expected no-guide response.
+
+Local Playwright uses `next dev` by default, which permits eval for development tooling. Set `PORTAL_E2E_SERVER=production` to build current frontend sources and start `next start`, then run `e2e/csp.production.ui.spec.ts` against the enforced production CSP. A failed build prevents server startup; an older `.next` bundle is not reused. This stays local with mocked BFF responses; it does not connect to production. See [commands and rollout](runbooks/client-project-loading.md).
+
 ## Administrator loading behavior
 
 Client cards include linked active organizations with zero buildings. Counts load in a separate queue of at most two requests, with an unavailable state and retry for failures. Opening a client cancels background count requests and prioritizes the selected catalog read. Existing `?client=` links resolve through the directory's linked prefixes; search, filters and building navigation remain available. Read cancellation and organization-tagged state prevent stale selection responses from rendering another client's buildings.
