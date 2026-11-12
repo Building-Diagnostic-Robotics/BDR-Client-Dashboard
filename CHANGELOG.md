@@ -4,6 +4,10 @@ History of this repository from `git log` (newest first). Merge commits are omit
 
 ## Unreleased
 
+- Type the client-transfer conditional-write helper with the SDK contract, preserving its ownership conditions while fixing expression-attribute type errors. Local production browser mode now rebuilds the frontend before startup so CSP tests cannot reuse a stale bundle after an earlier workspace build failure.
+- Prevent client catalog reads from loading scan manifests and operational enrichment that can exhaust Lambda memory. Bound concurrent summary/detail reads, preserve publication and timestamp checks, allocate 512 MB to Client BFF, and return request IDs on handled server errors. Disable browser Zod eval probes without weakening CSP, and add service/infrastructure/production-CSP regression coverage ([validation and rollout](./docs/runbooks/client-project-loading.md)); checks and deployment remain operator-run.
+- Add an operator-only client organization transfer command with read-only preview, conditional ownership changes, session revocation, durable retry checkpoints, and audit events. Preserve the Cognito account/password and revoked membership history; execution and tests remain operator-run ([runbook](./docs/runbooks/client-organization-transfer.md)).
+- Add a preview-first manual report publishing script and Durafoam manifest template for Assessment, Evidence, and As-built. Upload immutable checksum-verified files, register catalog/source claims, preserve prior references, and checkpoint conditional publication for guarded retries. No UI or infrastructure deployment is required; tests and live execution remain operator-run ([runbook](./docs/runbooks/manual-report-publication.md)).
 - Pass `CLIENT_BFF_API_URL` to Netlify build in production workflow and verify unauthenticated 401 response contract for `/bff/auth/session` rewrite.
 - Fix Netlify CLI monorepo project resolution in production deployment workflow with `--filter @bdr/web`.
 - `6b697bf` Fix workspace-relative path resolution for CDK diff destructive changes inspection script in CI.

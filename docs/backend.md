@@ -63,6 +63,10 @@ Implemented in `74d363e`; compatibility records have been reconciled in both env
 
 These routes live on the Client BFF. Reads return `404` when the session’s organization does not own the building prefix. Administrator-only routes return `403` for client sessions. Mutations require valid CSRF headers.
 
+Catalog summaries and inspection details read current publication status without full operational enrichment. They never load scan manifests, imagery, or report-history enrichment. Nested building/inspection reads share a request-local IO limit of four. Report timestamps retain the existing priority (`reportgenApprovedAt`, `generatedAt`, `clientApprovedAt`, `at`), with a metadata-only HEAD fallback for older published files and the existing `approvedAt` fallback. Publication failures still fail closed; a missing optional timestamp is not publication evidence. No persistent publication cache is introduced.
+
+Client BFF is configured with 512 MB and its existing 30-second timeout. Handled unexpected failures return the same `internal_error` body with an `x-request-id` header matching the server log. A runtime crash such as out-of-memory cannot reach this handler; use API Gateway's request ID, response time, and Lambda logs for those failures. See [client project loading validation and rollout](runbooks/client-project-loading.md).
+
 | Route | Who | Purpose |
 | --- | --- | --- |
 | `GET /bff/portal/buildings` | Client or admin | Physical-building summaries for the caller. Client ownership is session-derived. |
@@ -91,6 +95,10 @@ These routes live on the Client BFF. Reads return `404` when the session’s org
 Outbound portal email is not sent. `src/portal/email.ts` records the SES identity blocker, and notices stay on `pendingAdminEmail` in the building status until a sending domain is verified.
 
 ## Local Checks
+
+For externally prepared client reports, the standalone [manual publication workflow](runbooks/manual-report-publication.md) registers source-backed inspections and publishes Assessment, Evidence, and As-built using existing catalog and artifact-resolution rules. It runs locally with operator credentials, uses preview snapshots and conditional checkpoints, and does not require an API or infrastructure deployment.
+
+The standalone [client organization transfer workflow](runbooks/client-organization-transfer.md) is a controlled operator exception to immutable invitation ownership. It previews existing account state, revokes old sessions before reassignment, preserves the Cognito password/subject, and uses conditional transactions, audit events, and durable checkpoints. It requires no application deployment and never moves buildings or reports.
 
 From the repository root:
 

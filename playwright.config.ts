@@ -2,6 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 import { liveBaseURL } from "./e2e/live-config";
 
 const live = process.env.PORTAL_E2E_MODE === "live";
+const productionServer = !live && process.env.PORTAL_E2E_SERVER === "production";
 const localOrigin = "http://localhost:4300";
 const baseURL = live ? liveBaseURL(process.env) : localOrigin;
 
@@ -29,10 +30,12 @@ export default defineConfig({
   ],
   ...(!live ? {
     webServer: {
-      command: "npm run dev --workspace @bdr/web -- --hostname localhost --port 4300",
+      command: productionServer
+        ? "npm run build --workspace @bdr/web && npm run start --workspace @bdr/web -- --hostname localhost --port 4300"
+        : "npm run dev --workspace @bdr/web -- --hostname localhost --port 4300",
       url: localOrigin,
       reuseExistingServer: false,
-      timeout: 120_000,
+      timeout: productionServer ? 240_000 : 120_000,
       env: { CLIENT_BFF_API_URL: "" },
     },
   } : {}),

@@ -213,8 +213,8 @@ export async function organizationForClientPrefix(clientPrefix: string): Promise
   };
 }
 
-export async function linkedPrefixesForOrganization(organizationId: string): Promise<string[]> {
-  return prefixesFor(organizationId, false);
+export async function linkedPrefixesForOrganization(organizationId: string, metrics?: PortalListMetrics): Promise<string[]> {
+  return prefixesFor(organizationId, false, metrics);
 }
 
 export async function linkedPortalOrganizations(metrics?: PortalListMetrics): Promise<PortalAdminClient[]> {
@@ -618,14 +618,14 @@ export function normalizePortalTimestamp(value: unknown, timeZone: string | null
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
-export async function inspectPortalSource(prefixInput: string): Promise<PortalSourceInspection> {
+export async function inspectPortalSource(prefixInput: string, metrics?: PortalListMetrics): Promise<PortalSourceInspection> {
   const prefix = `${prefixInput.replace(/^\/+|\/+$/g, "")}/`;
   const parts = prefix.replace(/\/$/, "").split("/");
   if (parts.length !== 4) throw new Error("invalid_request");
   const [status, general, children] = await Promise.all([
-    readJson(`${prefix}reportgen/client_portal/status.json`),
-    readJson(`${prefix}general_data.json`),
-    listChildren(prefix),
+    readJson(`${prefix}reportgen/client_portal/status.json`, metrics),
+    readJson(`${prefix}general_data.json`, metrics),
+    listChildren(prefix, metrics),
   ]);
   const identity = mergePortalListMetadata(status, general);
   const sections: PortalSourceSection[] = [];
@@ -634,8 +634,8 @@ export async function inspectPortalSource(prefixInput: string): Promise<PortalSo
     const sectionId = child.replace(prefix, "").replace(/\/$/, "");
     if (!/^section_/i.test(sectionId)) continue;
     const [metadata, upload] = await Promise.all([
-      readFirst([`${child}gnss_session.json`, `${child}session_config.json`]),
-      readJson(`${child}_UPLOAD_COMPLETE.json`),
+      readFirst([`${child}gnss_session.json`, `${child}session_config.json`], metrics),
+      readJson(`${child}_UPLOAD_COMPLETE.json`, metrics),
     ]);
     const uploadCompletedAt = epochIso(upload.completed_at_epoch);
     if (!uploadCompletedAt) continue;
@@ -691,13 +691,14 @@ export function reportFileMatches(reportType: string, key: string): boolean {
   return name.includes(reportType.toLowerCase().replace(/_/g, ""));
 }
 
-async function generatedAt(report: Record<string, unknown>): Promise<string | null> {
+export async function portalReportGeneratedAt(report: Record<string, unknown>, metrics?: PortalListMetrics): Promise<string | null> {
   const existing = report.reportgenApprovedAt || report.generatedAt || report.clientApprovedAt || report.at;
   if (existing) return String(existing);
   const key = String(report.approvedKey || report.key || "");
   if (!key) return null;
   try {
-    const head = await s3.send(new HeadObjectCommand({ Bucket: bucket(), Key: key }));
+    const read = () => s3.send(new HeadObjectCommand({ Bucket: bucket(), Key: key }));
+    const head = await (metrics?.run ? metrics.run(read) : read());
     return head.LastModified?.toISOString() ?? null;
   } catch {
     return null;
@@ -772,10 +773,10 @@ async function portalListStatus(
     const name = child.replace(root, "").replace(/\/$/, "");
     return Boolean(name) && name !== "reportgen" && /section/i.test(name);
   });
-  const sectionMetadata = await Promise.all(sectionPrefixes.map((child) => readFirst([
+  const sectionMetadata = await mapConcurrent(sectionPrefixes, 4, (child) => readFirst([
     `${child}gnss_session.json`,
     `${child}session_config.json`,
-  ], metrics)));
+  ], metrics));
 
   let earliestScan: string | null = null;
   for (const metadata of sectionMetadata) {
@@ -828,13 +829,13 @@ export async function enrichPortalStatus(prefix: string, status: Record<string, 
     ? status.reports as Record<string, Record<string, unknown>>
     : {};
   for (const report of Object.values(reports)) {
-    report.generatedAt = await generatedAt(report);
+    report.generatedAt = await portalReportGeneratedAt(report);
   }
   if (Array.isArray(status.history)) {
     for (const item of status.history) {
       if (!item || typeof item !== "object") continue;
       const row = item as Record<string, unknown>;
-      row.generatedAt = await generatedAt(row);
+      row.generatedAt = await portalReportGeneratedAt(row);
     }
   }
   status.sections = sections;

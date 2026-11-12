@@ -19,6 +19,15 @@ function template(): Template {
 }
 
 describe("portal infrastructure", () => {
+  it("gives Client BFF memory headroom while retaining the existing timeout and other function defaults", () => {
+    const rendered = template();
+    rendered.hasResourceProperties("AWS::Lambda::Function", {
+      FunctionName: "bdr-portal-development-client-bff", MemorySize: 512, Timeout: 30,
+    });
+    rendered.hasResourceProperties("AWS::Lambda::Function", {
+      FunctionName: "bdr-portal-development-admin-api", MemorySize: 256, Timeout: 10,
+    });
+  });
   it("creates five protected on-demand tables without secondary indexes", () => {
     const rendered = template();
     rendered.resourceCountIs("AWS::DynamoDB::Table", 5);

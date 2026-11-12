@@ -1,0 +1,15 @@
+{
+  "environment": "production",
+  "accountId": "123456789012",
+  "administrator": {
+    "email": "operator@example.com",
+    "sub": "administrator-cognito-subject"
+  },
+  "client": {
+    "email": "client@example.com",
+    "sub": "client-cognito-subject",
+    "sourceOrganizationId": "org_source_0123456789",
+    "sourceUserId": "usr_source_0123456789",
+    "targetOrganizationId": "org_target_0123456789"
+  }
+}

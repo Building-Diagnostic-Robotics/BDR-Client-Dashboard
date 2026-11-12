@@ -233,6 +233,8 @@ describe("client BFF routes", () => {
     const handler = createClientBffHandler({ portalOrigin: "https://portal.example.com", service: operations });
     const response = await handler(event("GET", "/bff/auth/callback"));
     expect(response.statusCode).toBe(500);
+    expect(response.headers?.["x-request-id"]).toBe("request");
+    expect(JSON.parse(response.body ?? "{}")).toEqual({ error: "internal_error" });
     expect(response.headers?.location).toBeUndefined();
     expect(response.cookies).toBeUndefined();
     expect(response.body).not.toContain("database unavailable");

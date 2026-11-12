@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "environment": "production",
+  "accountId": "767397717805",
+  "organization": "Durafoam Roofing",
+  "buildings": [
+    {
+      "name": "Gibraltar",
+      "sourceUri": "s3://bdr-roofus-uploads/durafoam_roofing_CA/Roofus#0003/October_15_2026/688_Gibraltar_combined/",
+      "reports": {
+        "ASSESSMENT": "/absolute/path/to/gibraltar-assessment.pdf",
+        "EVIDENCE": "/absolute/path/to/gibraltar-evidence.pdf",
+        "AS_BUILT": "/absolute/path/to/gibraltar-as-built.pdf"
+      }
+    },
+    {
+      "name": "Ansys Zanker",
+      "sourceUri": "s3://bdr-roofus-uploads/durafoam_roofing_CA/Roofus#0003/October_14_2026/Ansys_2645_zanker_rd/",
+      "reports": {
+        "ASSESSMENT": "/absolute/path/to/zanker-assessment.pdf",
+        "EVIDENCE": "/absolute/path/to/zanker-evidence.pdf",
+        "AS_BUILT": "/absolute/path/to/zanker-as-built.pdf"
+      }
+    }
+  ]
+}

@@ -477,6 +477,7 @@ export class PortalStack extends Stack {
     const clientBff = createFunction("ClientBffFunction", "client-bff", {
       entry: clientBffEntry,
       timeout: Duration.seconds(30),
+      memorySize: 512,
     });
     const adminApi = createFunction("AdminApiFunction", "admin-api", { entry: adminApiEntry });
     const artifactSigner = createFunction("ArtifactSignerFunction", "artifact-signer", { entry: artifactSignerEntry });
