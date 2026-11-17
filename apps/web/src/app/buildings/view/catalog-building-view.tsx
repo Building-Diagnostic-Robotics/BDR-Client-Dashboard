@@ -389,7 +389,15 @@ export function AdminControls({
 
   function stageAsBuilt(inspection: PortalInspection, file: File) {
     setError(null);
-    if (!["application/pdf", "image/png", "image/jpeg"].includes(file.type) || file.size > 50 * 1024 * 1024) {
+    let contentType = file.type;
+    const lowerName = file.name.toLowerCase();
+    if (!contentType && (lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg"))) {
+      contentType = "image/jpeg";
+    } else if (contentType === "image/jpg") {
+      contentType = "image/jpeg";
+    }
+
+    if (!["application/pdf", "image/png", "image/jpeg"].includes(contentType) || file.size > 50 * 1024 * 1024) {
       setError("Choose a PDF, PNG, or JPEG smaller than 50 MB.");
       return;
     }
@@ -398,7 +406,7 @@ export function AdminControls({
       [inspection.inspectionId]: {
         file,
         filename: file.name,
-        contentType: file.type as PendingAsBuilt["contentType"],
+        contentType: contentType as PendingAsBuilt["contentType"],
         sizeBytes: file.size,
       },
     }));
@@ -418,11 +426,18 @@ export function AdminControls({
         contentType: pending.contentType,
         sizeBytes: pending.sizeBytes,
       }, portalAsBuiltUploadResponseSchema);
-      const response = await fetch(upload.url, {
-        method: "PUT",
-        headers: { "content-type": pending.contentType },
-        body: pending.file,
-      });
+      let response: Response;
+      try {
+        response = await fetch(upload.url, {
+          method: "PUT",
+          headers: { "content-type": pending.contentType },
+          body: pending.file,
+          credentials: "omit",
+          cache: "no-store",
+        });
+      } catch {
+        throw new Error("upload_network_failed");
+      }
       if (!response.ok) throw new Error("upload_failed");
       const next = await postClient("/bff/portal/as-built-publish", {
         buildingId: persisted.buildingId,
@@ -442,9 +457,13 @@ export function AdminControls({
       });
       onChanged(next);
     } catch (reason) {
-      setError(reason instanceof ClientApiError && reason.status === 409
-        ? "The building changed while this file was being published. Reload and review it before retrying."
-        : "The As-built file could not be published.");
+      if (reason instanceof ClientApiError && reason.status === 409) {
+        setError("The building changed while this file was being published. Reload and review it before retrying.");
+      } else if (reason instanceof Error && reason.message === "upload_network_failed") {
+        setError("The As-built file upload failed. Check your network connection and storage CORS settings.");
+      } else {
+        setError("The As-built file could not be published.");
+      }
     } finally {
       setBusy(false);
     }
