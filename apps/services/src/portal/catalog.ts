@@ -20,6 +20,7 @@ import type {
   PortalReport,
   PortalReportType,
 } from "@bdr/contracts";
+import { maxReportSizeBytes } from "@bdr/contracts";
 import { auditExpiresAt, auditKeys, conflict, notFound, sha256, tenantKeys } from "@bdr/domain";
 
 import {
@@ -30,14 +31,18 @@ import {
   listLinkedClients,
   listPortalBuildings,
   loadPortalReportStatus,
+  loadPortalStatusVersion,
   normalizePortalTimestamp,
   portalObjectMetadata,
   portalReportGeneratedAt,
   portalSourceId,
   provisionalPortalBuildingId,
   provisionalPortalInspectionId,
+  rememberReport,
   reportFileMatches,
   resolvePortalArtifactSource,
+  savePortalStatus,
+  signedRead,
   signedUpload,
   summary,
   type PortalBuilding,
@@ -62,13 +67,15 @@ const DEFAULT_STATUSES: Record<PortalReportType, PortalPendingReportStatus> = {
   CAPITAL_PLANNING: "NOT_INCLUDED",
 };
 
-type AsBuiltArtifact = {
+export type StoredReportArtifact = {
   key: string;
   filename: string;
   contentType: string;
   sizeBytes: number;
   publishedAt: string;
 };
+
+type AsBuiltArtifact = StoredReportArtifact;
 
 type StoredInspection = {
   inspectionId: string;
@@ -81,6 +88,7 @@ type StoredInspection = {
   reportStatuses: Record<PortalReportType, PortalPendingReportStatus>;
   sourceFingerprint: string;
   asBuilt: AsBuiltArtifact | null;
+  reports?: Partial<Record<PortalReportType, StoredReportArtifact>>;
 };
 
 export type StoredBuilding = {
@@ -336,6 +344,25 @@ function publishedArtifact(
   type: PortalReportType,
   status: Record<string, unknown>,
 ): ResolvedArtifact | null {
+  const uploaded = inspection.reports?.[type];
+  if (uploaded) {
+    const root = type === "AS_BUILT"
+      ? `reportgen_portal/as-built/${building.organizationId}/${building.buildingId}/${inspection.inspectionId}/drafts/`
+      : `reportgen_portal/reports/${building.organizationId}/${building.buildingId}/${inspection.inspectionId}/drafts/`;
+    const extension = uploaded.contentType === "application/pdf" ? "pdf"
+      : uploaded.contentType === "image/png" ? "png" : uploaded.contentType === "image/jpeg" ? "jpg" : null;
+    const fileSuffix = type === "AS_BUILT" ? "as-built" : type.toLowerCase();
+    if (extension && uploaded.key.startsWith(root)
+      && new RegExp(`^upl_[a-f0-9]{32}/${fileSuffix}\\.${extension}$`).test(uploaded.key.slice(root.length))
+      && Number.isFinite(Date.parse(uploaded.publishedAt))) {
+      return {
+        key: uploaded.key,
+        filename: reportDownloadFilename(building.displayName, type, uploaded.contentType),
+        contentType: uploaded.contentType,
+      };
+    }
+  }
+
   if (type === "AS_BUILT") {
     const published = inspection.asBuilt;
     if (!published) return null;
@@ -376,13 +403,23 @@ async function reportView(inspection: StoredInspection, building: StoredBuilding
   const reports = await mapConcurrent(REPORT_ORDER, 4, async (type): Promise<PortalReport> => {
     const artifact = publishedArtifact(building, inspection, type, status);
     if (artifact) artifacts.set(type, artifact);
+
+    const sourceReport = sourceReports[reportKey(type)];
+    const pendingReview = sourceReport && sourceReport.awaitingClientAdmin && !sourceReport.stale
+      ? {
+          sourceKey: String(sourceReport.sourceKey || sourceReport.approvedKey || ""),
+          generatedAt: typeof sourceReport.generatedAt === "string" ? sourceReport.generatedAt : null,
+        }
+      : null;
+
     if (type === "AS_BUILT") {
-      if (artifact && inspection.asBuilt) {
+      if (artifact && (inspection.asBuilt || inspection.reports?.AS_BUILT)) {
         return {
           reportType: type,
           deliveryStatus: "AVAILABLE",
-          publishedAt: inspection.asBuilt.publishedAt,
+          publishedAt: inspection.reports?.AS_BUILT?.publishedAt ?? inspection.asBuilt!.publishedAt,
           filename: artifact.filename,
+          pendingReview,
         };
       }
       return {
@@ -390,9 +427,21 @@ async function reportView(inspection: StoredInspection, building: StoredBuilding
         deliveryStatus: inspection.reportStatuses[type] ?? DEFAULT_STATUSES[type],
         publishedAt: null,
         filename: null,
+        pendingReview,
       };
     }
-    const sourceReport = sourceReports[reportKey(type)];
+
+    const uploaded = inspection.reports?.[type];
+    if (artifact && uploaded) {
+      return {
+        reportType: type,
+        deliveryStatus: "AVAILABLE",
+        publishedAt: uploaded.publishedAt,
+        filename: artifact.filename,
+        pendingReview,
+      };
+    }
+
     const available = artifact !== null;
     // Match operational timestamp precedence, with a metadata-only HEAD fallback
     // for published files whose older status records lack timestamps.
@@ -405,6 +454,7 @@ async function reportView(inspection: StoredInspection, building: StoredBuilding
       deliveryStatus: available ? "AVAILABLE" : inspection.reportStatuses[type] ?? DEFAULT_STATUSES[type],
       publishedAt: available ? publishedAt : null,
       filename: artifact?.filename ?? null,
+      pendingReview,
     };
   });
   return { reports, artifacts };
@@ -870,18 +920,121 @@ export async function updatePortalInspectionStatuses(
   return detailFromResolved({ item: next, provisional: false });
 }
 
+export async function startPortalReportUpload(
+  organizationId: string,
+  buildingId: string,
+  inspectionId: string,
+  input: { reportType: PortalReportType; filename: string; contentType: string; sizeBytes: number },
+): Promise<{ uploadId: string; url: string; key: string }> {
+  if (input.sizeBytes > maxReportSizeBytes(input.reportType)) throw new Error("invalid_request");
+  if (input.reportType !== "AS_BUILT" && input.contentType !== "application/pdf") throw new Error("invalid_request");
+  const resolved = await resolveBuilding(organizationId, buildingId, true);
+  if (!resolved.item.inspections.some((inspection) => inspection.inspectionId === inspectionId)) notFound();
+  const uploadId = `upl_${randomUUID().replaceAll("-", "")}`;
+  const extension = input.contentType === "application/pdf" ? "pdf" : input.contentType === "image/png" ? "png" : "jpg";
+  const key = input.reportType === "AS_BUILT"
+    ? `reportgen_portal/as-built/${organizationId}/${buildingId}/${inspectionId}/drafts/${uploadId}/as-built.${extension}`
+    : `reportgen_portal/reports/${organizationId}/${buildingId}/${inspectionId}/drafts/${uploadId}/${input.reportType.toLowerCase()}.${extension}`;
+  return { uploadId, key, url: await signedUpload(key, input.contentType) };
+}
+
+export async function publishPortalReport(
+  organizationId: string,
+  buildingId: string,
+  inspectionId: string,
+  input: { reportType: PortalReportType; uploadId: string; key: string; filename: string; contentType: string; sizeBytes: number; expectedRevision: string },
+  audit: PortalCatalogMutationContext,
+): Promise<PortalBuildingDetail> {
+  const extension = input.contentType === "application/pdf" ? "pdf" : input.contentType === "image/png" ? "png" : input.contentType === "image/jpeg" ? "jpg" : null;
+  if (!extension || !/^upl_[a-f0-9]{32}$/.test(input.uploadId)
+    || !Number.isInteger(input.sizeBytes) || input.sizeBytes <= 0 || input.sizeBytes > maxReportSizeBytes(input.reportType)
+    || (input.reportType !== "AS_BUILT" && input.contentType !== "application/pdf")) {
+    throw new Error("invalid_request");
+  }
+  const expectedPrefix = input.reportType === "AS_BUILT"
+    ? `reportgen_portal/as-built/${organizationId}/${buildingId}/${inspectionId}/drafts/${input.uploadId}/`
+    : `reportgen_portal/reports/${organizationId}/${buildingId}/${inspectionId}/drafts/${input.uploadId}/`;
+  if (!input.key.startsWith(expectedPrefix)) throw new Error("invalid_request");
+  const metadata = await portalObjectMetadata(input.key);
+  if (metadata.sizeBytes !== input.sizeBytes || metadata.contentType !== input.contentType) throw new Error("invalid_request");
+  const resolved = await resolveBuilding(organizationId, buildingId, true);
+  if (resolved.provisional || resolved.item.revision !== input.expectedRevision) conflict();
+  const publishedAt = new Date().toISOString();
+  const prepared = portalBuildingWithReport(resolved.item, inspectionId, input, publishedAt);
+  const next = await saveBuilding(
+    prepared,
+    input.expectedRevision,
+    audit,
+    { buildingId, inspectionId, reportType: input.reportType, uploadId: input.uploadId },
+  );
+
+  const inspection = resolved.item.inspections.find((row) => row.inspectionId === inspectionId);
+  if (inspection?.sourcePrefix) {
+    try {
+      const statusSnapshot = await loadPortalStatusVersion(inspection.sourcePrefix);
+      const status = statusSnapshot.status;
+      const history = Array.isArray(status.history) ? status.history as Array<Record<string, unknown>> : [];
+      history.push({
+        reportType: input.reportType,
+        key: input.key,
+        label: "Manual upload",
+        at: publishedAt,
+      });
+      status.history = history;
+      await savePortalStatus(inspection.sourcePrefix, status, statusSnapshot.eTag);
+    } catch {
+      // DynamoDB catalog is authoritative; status.json history is supplementary.
+    }
+  }
+
+  return detailFromResolved({ item: next, provisional: false });
+}
+
+export function portalBuildingWithReport(
+  building: StoredBuilding,
+  inspectionId: string,
+  input: { reportType: PortalReportType; uploadId: string; key: string; filename: string; contentType: string; sizeBytes: number },
+  publishedAt: string,
+): StoredBuilding {
+  const extension = input.contentType === "application/pdf" ? "pdf" : input.contentType === "image/png" ? "png" : input.contentType === "image/jpeg" ? "jpg" : null;
+  const expectedKey = input.reportType === "AS_BUILT"
+    ? `reportgen_portal/as-built/${building.organizationId}/${building.buildingId}/${inspectionId}/drafts/${input.uploadId}/as-built.${extension}`
+    : `reportgen_portal/reports/${building.organizationId}/${building.buildingId}/${inspectionId}/drafts/${input.uploadId}/${input.reportType.toLowerCase()}.${extension}`;
+  if (!extension || !/^upl_[a-f0-9]{32}$/.test(input.uploadId) || input.key !== expectedKey
+    || !Number.isInteger(input.sizeBytes) || input.sizeBytes <= 0 || input.sizeBytes > maxReportSizeBytes(input.reportType)
+    || (input.reportType !== "AS_BUILT" && input.contentType !== "application/pdf")
+    || !Number.isFinite(Date.parse(publishedAt))) throw new Error("invalid_request");
+  let found = false;
+  const inspections = building.inspections.map((inspection) => {
+    if (inspection.inspectionId !== inspectionId) return inspection;
+    found = true;
+    const reportArtifact: StoredReportArtifact = {
+      key: input.key,
+      filename: input.filename,
+      contentType: input.contentType,
+      sizeBytes: input.sizeBytes,
+      publishedAt,
+    };
+    return {
+      ...inspection,
+      ...(input.reportType === "AS_BUILT" ? { asBuilt: reportArtifact } : {}),
+      reports: {
+        ...(inspection.reports ?? {}),
+        [input.reportType]: reportArtifact,
+      },
+    };
+  });
+  if (!found) notFound();
+  return { ...building, inspections };
+}
+
 export async function startPortalAsBuiltUpload(
   organizationId: string,
   buildingId: string,
   inspectionId: string,
   input: { filename: string; contentType: string; sizeBytes: number },
 ): Promise<{ uploadId: string; url: string; key: string }> {
-  const resolved = await resolveBuilding(organizationId, buildingId, true);
-  if (!resolved.item.inspections.some((inspection) => inspection.inspectionId === inspectionId)) notFound();
-  const uploadId = `upl_${randomUUID().replaceAll("-", "")}`;
-  const extension = input.contentType === "application/pdf" ? "pdf" : input.contentType === "image/png" ? "png" : "jpg";
-  const key = `reportgen_portal/as-built/${organizationId}/${buildingId}/${inspectionId}/drafts/${uploadId}/as-built.${extension}`;
-  return { uploadId, key, url: await signedUpload(key, input.contentType) };
+  return startPortalReportUpload(organizationId, buildingId, inspectionId, { ...input, reportType: "AS_BUILT" });
 }
 
 export async function publishPortalAsBuilt(
@@ -891,20 +1044,7 @@ export async function publishPortalAsBuilt(
   input: { uploadId: string; key: string; filename: string; contentType: string; sizeBytes: number; expectedRevision: string },
   audit: PortalCatalogMutationContext,
 ): Promise<PortalBuildingDetail> {
-  const expectedPrefix = `reportgen_portal/as-built/${organizationId}/${buildingId}/${inspectionId}/drafts/${input.uploadId}/`;
-  if (!input.key.startsWith(expectedPrefix)) throw new Error("invalid_request");
-  const metadata = await portalObjectMetadata(input.key);
-  if (metadata.sizeBytes !== input.sizeBytes || metadata.contentType !== input.contentType) throw new Error("invalid_request");
-  const resolved = await resolveBuilding(organizationId, buildingId, true);
-  if (resolved.provisional || resolved.item.revision !== input.expectedRevision) conflict();
-  const prepared = portalBuildingWithAsBuilt(resolved.item, inspectionId, input, new Date().toISOString());
-  const next = await saveBuilding(
-    prepared,
-    input.expectedRevision,
-    audit,
-    { buildingId, inspectionId, uploadId: input.uploadId },
-  );
-  return detailFromResolved({ item: next, provisional: false });
+  return publishPortalReport(organizationId, buildingId, inspectionId, { ...input, reportType: "AS_BUILT" }, audit);
 }
 
 /** Shared pointer preparation. Callers must verify the private object's bytes/type before committing. */
@@ -914,28 +1054,101 @@ export function portalBuildingWithAsBuilt(
   input: { uploadId: string; key: string; filename: string; contentType: string; sizeBytes: number },
   publishedAt: string,
 ): StoredBuilding {
-  const extension = input.contentType === "application/pdf" ? "pdf" : input.contentType === "image/png" ? "png" : input.contentType === "image/jpeg" ? "jpg" : null;
-  const expectedKey = `reportgen_portal/as-built/${building.organizationId}/${building.buildingId}/${inspectionId}/drafts/${input.uploadId}/as-built.${extension}`;
-  if (!extension || !/^upl_[a-f0-9]{32}$/.test(input.uploadId) || input.key !== expectedKey
-    || !Number.isInteger(input.sizeBytes) || input.sizeBytes <= 0 || input.sizeBytes > 50 * 1024 * 1024
-    || !Number.isFinite(Date.parse(publishedAt))) throw new Error("invalid_request");
-  let found = false;
-  const inspections = building.inspections.map((inspection) => {
-    if (inspection.inspectionId !== inspectionId) return inspection;
-    found = true;
-    return {
-      ...inspection,
-      asBuilt: {
-        key: input.key,
-        filename: input.filename,
-        contentType: input.contentType,
-        sizeBytes: input.sizeBytes,
-        publishedAt,
-      },
-    };
-  });
-  if (!found) notFound();
-  return { ...building, inspections };
+  return portalBuildingWithReport(building, inspectionId, { ...input, reportType: "AS_BUILT" }, publishedAt);
+}
+
+export async function previewPortalReportReview(
+  organizationId: string,
+  buildingId: string,
+  inspectionId: string,
+  reportType: PortalReportType,
+): Promise<{ url: string }> {
+  const resolved = await resolveBuilding(organizationId, buildingId, true);
+  const inspection = resolved.item.inspections.find((i) => i.inspectionId === inspectionId);
+  if (!inspection) notFound();
+  const status = await loadPortalReportStatus(inspection.sourcePrefix);
+  const reports = status.reports as Record<string, Record<string, unknown>> | undefined;
+  const report = reports?.[reportKey(reportType)];
+  if (!report?.awaitingClientAdmin || report.stale) notFound();
+  const key = String(report.sourceKey || report.approvedKey || "");
+  if (!key || !allowedClientKey(inspection.sourcePrefix, key)) notFound();
+  return { url: await signedRead(key) };
+}
+
+export async function approvePortalReportReview(
+  organizationId: string,
+  buildingId: string,
+  inspectionId: string,
+  reportType: PortalReportType,
+  audit: PortalCatalogMutationContext,
+): Promise<PortalBuildingDetail> {
+  const resolved = await resolveBuilding(organizationId, buildingId, true);
+  const inspection = resolved.item.inspections.find((i) => i.inspectionId === inspectionId);
+  if (!inspection) notFound();
+  const statusSnapshot = await loadPortalStatusVersion(inspection.sourcePrefix);
+  const status = statusSnapshot.status;
+  const rKey = reportKey(reportType);
+  const report = (status.reports as Record<string, Record<string, unknown>> | undefined)?.[rKey];
+  if (!report?.awaitingClientAdmin) throw new Error("invalid_request");
+  const source = String(report.sourceKey || report.approvedKey || "");
+  if (!reportFileMatches(rKey, source)) throw new Error("invalid_request");
+  report.clientVisible = true;
+  report.awaitingClientAdmin = false;
+  report.stale = false;
+  status.released = true;
+  rememberReport(status, rKey, report, false);
+
+  if (reportType === "ASSESSMENT" || reportType === "EVIDENCE") {
+    status.mapReady = true;
+    const { CopyObjectCommand, PutObjectCommand, S3Client } = await import("@aws-sdk/client-s3");
+    const client = new S3Client({});
+    const root = inspection.sourcePrefix.replace(/\/?$/, "/");
+    const bucket = process.env.DATA_BUCKET_NAME;
+    try {
+      await client.send(new CopyObjectCommand({
+        Bucket: bucket,
+        Key: `${root}reportgen/client_portal/map/aerial.png`,
+        CopySource: `${bucket}/${root}reportgen/aerial/aerial.png`,
+      }));
+    } catch {
+      status.mapReady = false;
+    }
+    await client.send(new PutObjectCommand({
+      Bucket: bucket,
+      Key: `${root}reportgen/client_portal/map/manifest.json`,
+      Body: JSON.stringify({
+        aerial: `${root}reportgen/client_portal/map/aerial.png`,
+        moisture: `${root}reportgen/client_portal/map/moisture.png`,
+        anomalies: `${root}reportgen/client_portal/map/anomalies.geojson`,
+        filters: ["moisture", "anomalyType", "severity", "section"],
+      }),
+      ContentType: "application/json",
+    }));
+  }
+
+  await savePortalStatus(inspection.sourcePrefix, status, statusSnapshot.eTag);
+
+  let nextItem = resolved.item;
+  if (resolved.item.inspections.some((i) => i.inspectionId === inspectionId && i.reports?.[reportType])) {
+    const inspections = resolved.item.inspections.map((i) => {
+      if (i.inspectionId !== inspectionId || !i.reports?.[reportType]) return i;
+      const nextReports = { ...i.reports };
+      delete nextReports[reportType];
+      return {
+        ...i,
+        ...(reportType === "AS_BUILT" ? { asBuilt: null } : {}),
+        reports: nextReports,
+      };
+    });
+    nextItem = await saveBuilding(
+      { ...resolved.item, inspections },
+      resolved.item.revision,
+      audit,
+      { buildingId, inspectionId, reportType },
+    );
+  }
+
+  return detailFromResolved({ item: nextItem, provisional: false });
 }
 
 export async function resolvePortalArtifact(
@@ -958,7 +1171,7 @@ export async function resolvePortalArtifact(
       const inspection = building.inspections.find((candidate) => candidate.inspectionId === inspectionId);
       if (!inspection) notFound();
       // An available published report also makes a legacy unreleased building visible.
-      const status = type === "AS_BUILT" ? {} : await loadPortalReportStatus(inspection.sourcePrefix);
+      const status = (type === "AS_BUILT" || inspection.reports?.[type]) ? {} : await loadPortalReportStatus(inspection.sourcePrefix);
       artifact = publishedArtifact(building, inspection, type, status);
     } else {
       provisional = true;

@@ -1075,6 +1075,20 @@ export async function savePortalStatus(
   await writeJson(key, status, expectedETag);
 }
 
+export function rememberReport(status: Record<string, unknown>, reportType: string, report: Record<string, unknown>, stale: boolean): void {
+  const key = String(report.approvedKey || "");
+  if (!key) return;
+  const history = Array.isArray(status.history) ? status.history as Array<Record<string, unknown>> : [];
+  history.push({
+    reportType,
+    key,
+    label: stale ? "Stale" : "Approved",
+    stale,
+    at: new Date().toISOString(),
+  });
+  status.history = history;
+}
+
 export function clientCanSee(status: Record<string, unknown>, organizationId: string | null, admin: boolean): boolean {
   if (admin) return true;
   const reports = status.reports && typeof status.reports === "object"

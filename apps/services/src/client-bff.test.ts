@@ -27,7 +27,12 @@ vi.mock("./portal/buildings", async (importOriginal) => {
 
 vi.mock("./portal/catalog", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./portal/catalog")>();
-  return { ...actual, resolvePortalArtifact: vi.fn() };
+  return {
+    ...actual,
+    resolvePortalArtifact: vi.fn(),
+    startPortalReportUpload: vi.fn(),
+    publishPortalReport: vi.fn(),
+  };
 });
 
 vi.mock("./portal/admin-reads", () => ({
@@ -591,5 +596,55 @@ describe("administrator directory and review read routes", () => {
     expect(adminClientBuildingCount).toHaveBeenCalledWith(organizationId, "request");
     expect((await handler(event("GET", "/bff/portal/admin/clients/invalid/buildings"))).statusCode).toBe(400);
     expect(adminClientBuildings).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("administrator report upload and publish routes", () => {
+  beforeEach(() => vi.clearAllMocks());
+  const adminIssuer = "https://issuer.example.com/admin-pool";
+  function handlerFor(issuer: string) {
+    const resources = {
+      policy: {
+        loadActiveClientContext: vi.fn(async () => ({
+          issuer,
+          sub: identity.sub,
+          userId: identity.userId,
+          organization: { organizationId: identity.organizationId, displayName: "Dashboard", status: "ACTIVE" },
+        })),
+      },
+    } as never;
+    return createClientBffHandler({ portalOrigin: "https://portal.example.com", service: service(), resources, adminIssuer });
+  }
+
+  it("denies report-upload and report-publish for non-admin client sessions", async () => {
+    const clientHandler = handlerFor(identity.issuer);
+    const uploadRes = await clientHandler(event("POST", "/bff/portal/report-upload", {
+      headers: { origin: "https://portal.example.com", "x-csrf-token": csrf },
+      body: JSON.stringify({
+        buildingId: "pbl_111111111111111111111111",
+        inspectionId: "pin_111111111111111111111111",
+        reportType: "EVIDENCE",
+        filename: "evidence.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 1000,
+      }),
+    }));
+    expect(uploadRes.statusCode).toBe(403);
+
+    const publishRes = await clientHandler(event("POST", "/bff/portal/report-publish", {
+      headers: { origin: "https://portal.example.com", "x-csrf-token": csrf },
+      body: JSON.stringify({
+        buildingId: "pbl_111111111111111111111111",
+        inspectionId: "pin_111111111111111111111111",
+        reportType: "EVIDENCE",
+        uploadId: `upl_${"c".repeat(32)}`,
+        key: "some/key.pdf",
+        filename: "evidence.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 1000,
+        expectedRevision: "rev_111111111111111111111111",
+      }),
+    }));
+    expect(publishRes.statusCode).toBe(403);
   });
 });

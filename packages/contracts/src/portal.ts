@@ -26,6 +26,10 @@ export const portalReportSchema = z.object({
   deliveryStatus: portalReportDeliveryStatusSchema,
   publishedAt: z.iso.datetime({ offset: true }).nullable(),
   filename: z.string().trim().min(1).max(240).nullable(),
+  pendingReview: z.object({
+    sourceKey: z.string(),
+    generatedAt: z.string().nullable(),
+  }).nullable().optional(),
 }).strict();
 
 export const portalInspectionSummarySchema = z.object({
@@ -170,10 +174,85 @@ export const publishPortalAsBuiltRequestSchema = z.object({
   expectedRevision: opaqueIdSchema,
 }).strict();
 
+export function maxReportSizeBytes(reportType: PortalReportType): number {
+  if (reportType === "EVIDENCE") return 300 * 1024 * 1024;
+  if (reportType === "AS_BUILT") return 50 * 1024 * 1024;
+  return 100 * 1024 * 1024;
+}
+
+export const portalReportUploadRequestSchema = z.object({
+  reportType: portalReportTypeSchema,
+  filename: z.string().trim().min(1).max(240),
+  contentType: z.enum(["application/pdf", "image/png", "image/jpeg"]),
+  sizeBytes: z.number().int().positive().max(300 * 1024 * 1024),
+}).strict().superRefine((data, ctx) => {
+  if (data.sizeBytes > maxReportSizeBytes(data.reportType)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `File exceeds maximum size for ${data.reportType}`,
+      path: ["sizeBytes"],
+    });
+  }
+  if (data.reportType !== "AS_BUILT" && data.contentType !== "application/pdf") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Only PDF format is permitted for this report category",
+      path: ["contentType"],
+    });
+  }
+});
+
+export const portalReportUploadResponseSchema = z.object({
+  uploadId: opaqueIdSchema,
+  url: z.string().url(),
+  key: z.string().min(1),
+}).strict();
+
+export const publishPortalReportRequestSchema = z.object({
+  reportType: portalReportTypeSchema,
+  uploadId: opaqueIdSchema,
+  key: z.string().min(1),
+  filename: z.string().trim().min(1).max(240),
+  contentType: z.enum(["application/pdf", "image/png", "image/jpeg"]),
+  sizeBytes: z.number().int().positive().max(300 * 1024 * 1024),
+  expectedRevision: opaqueIdSchema,
+}).strict().superRefine((data, ctx) => {
+  if (data.sizeBytes > maxReportSizeBytes(data.reportType)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `File exceeds maximum size for ${data.reportType}`,
+      path: ["sizeBytes"],
+    });
+  }
+  if (data.reportType !== "AS_BUILT" && data.contentType !== "application/pdf") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Only PDF format is permitted for this report category",
+      path: ["contentType"],
+    });
+  }
+});
+
+export const portalReportActionRequestSchema = z.object({
+  buildingId: opaqueIdSchema,
+  inspectionId: opaqueIdSchema,
+  reportType: portalReportTypeSchema,
+  clientPrefix: z.string().trim().min(1).optional(),
+}).strict();
+
+export const portalReportPreviewResponseSchema = z.object({
+  url: z.string().url(),
+}).strict();
+
 export type PortalReportType = z.infer<typeof portalReportTypeSchema>;
 export type PortalReportDeliveryStatus = z.infer<typeof portalReportDeliveryStatusSchema>;
 export type PortalPendingReportStatus = z.infer<typeof portalPendingReportStatusSchema>;
 export type PortalReport = z.infer<typeof portalReportSchema>;
+export type PortalReportUploadRequest = z.infer<typeof portalReportUploadRequestSchema>;
+export type PortalReportUploadResponse = z.infer<typeof portalReportUploadResponseSchema>;
+export type PublishPortalReportRequest = z.infer<typeof publishPortalReportRequestSchema>;
+export type PortalReportActionRequest = z.infer<typeof portalReportActionRequestSchema>;
+export type PortalReportPreviewResponse = z.infer<typeof portalReportPreviewResponseSchema>;
 export type PortalInspectionSummary = z.infer<typeof portalInspectionSummarySchema>;
 export type PortalInspection = z.infer<typeof portalInspectionSchema>;
 export type PortalBuildingSummary = z.infer<typeof portalBuildingSummarySchema>;
