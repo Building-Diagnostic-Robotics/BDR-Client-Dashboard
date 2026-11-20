@@ -7,8 +7,11 @@ import {
   passwordResetConfirmSchema,
   passwordResetRequestSchema,
   portalAsBuiltUploadRequestSchema,
+  portalReportActionRequestSchema,
   portalReportTypeSchema,
+  portalReportUploadRequestSchema,
   publishPortalAsBuiltRequestSchema,
+  publishPortalReportRequestSchema,
   reportTypeSchema,
   updatePortalBuildingRequestSchema,
   updatePortalInspectionRequestSchema,
@@ -42,8 +45,8 @@ import {
 import { JSON_HEADERS, clearCookie, json, redirect, requestId, secureCookie } from "./shared/http";
 import { ClientResourceService } from "./client/resources";
 import { emailBlocked } from "./portal/email";
-import { allowedClientKey, clientCanSee, commitHowToRead, createClientAccount, createPortalAdmin, currentHowToReadForOrg, howToReadFor, howToReadUpload, linkClient, listClientUsers, listLinkedClients, listPortalBuildings, listUnlinkedFolders, loadPortalStatus, loadPortalStatusVersion, organizationForClientPrefix, ownsPrefix, PORTAL_ADMIN_ORGANIZATION_ID, renameClient, replaceClientEmail, reportFileMatches, resendClientInvite, revokeClientUser, savePortalStatus, signedArtifactRead, signedRead, signedReadWithDisposition, signedUpload } from "./portal/buildings";
-import { attachPortalInspection, getPortalCatalogBuilding, listPortalAdminCatalogBuildings, listPortalCatalogBuildings, listPortalInspectionCandidates, portalBuildingIdForSource, publishPortalAsBuilt, resolvePortalArtifact, startPortalAsBuiltUpload, updatePortalCatalogBuilding, updatePortalInspectionStatuses } from "./portal/catalog";
+import { allowedClientKey, clientCanSee, commitHowToRead, createClientAccount, createPortalAdmin, currentHowToReadForOrg, howToReadFor, howToReadUpload, linkClient, listClientUsers, listLinkedClients, listPortalBuildings, listUnlinkedFolders, loadPortalStatus, loadPortalStatusVersion, organizationForClientPrefix, ownsPrefix, PORTAL_ADMIN_ORGANIZATION_ID, rememberReport, renameClient, replaceClientEmail, reportFileMatches, resendClientInvite, revokeClientUser, savePortalStatus, signedArtifactRead, signedRead, signedReadWithDisposition, signedUpload } from "./portal/buildings";
+import { approvePortalReportReview, attachPortalInspection, getPortalCatalogBuilding, listPortalAdminCatalogBuildings, listPortalCatalogBuildings, listPortalInspectionCandidates, portalBuildingIdForSource, previewPortalReportReview, publishPortalAsBuilt, publishPortalReport, resolvePortalArtifact, startPortalAsBuiltUpload, startPortalReportUpload, updatePortalCatalogBuilding, updatePortalInspectionStatuses } from "./portal/catalog";
 
 const cognito = new CognitoIdentityProviderClient({});
 const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60;
@@ -568,6 +571,24 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
             input,
           ));
         }
+        if (method === "POST" && path === "/bff/portal/report-upload") {
+          assertMutationRequest(event, dependencies.portalOrigin, active.session.csrfTokenHash);
+          if (!admin) return json(403, { error: "forbidden" });
+          const body = JSON.parse(event.body ?? "{}") as Record<string, unknown>;
+          const input = portalReportUploadRequestSchema.parse({
+            reportType: body.reportType,
+            filename: body.filename,
+            contentType: body.contentType,
+            sizeBytes: body.sizeBytes,
+          });
+          const targetOrganizationId = await targetPortalOrganization(body.clientPrefix);
+          return json(200, await startPortalReportUpload(
+            targetOrganizationId,
+            opaqueIdSchema.parse(body.buildingId),
+            opaqueIdSchema.parse(body.inspectionId),
+            input,
+          ));
+        }
         if (method === "POST" && path === "/bff/portal/as-built-publish") {
           assertMutationRequest(event, dependencies.portalOrigin, active.session.csrfTokenHash);
           if (!admin) return json(403, { error: "forbidden" });
@@ -587,6 +608,65 @@ export function createClientBffHandler(dependencies: Dependencies): HttpHandler 
             opaqueIdSchema.parse(body.inspectionId),
             input,
             portalMutationContext("PORTAL_AS_BUILT_PUBLISHED"),
+          ));
+        }
+        if (method === "POST" && path === "/bff/portal/report-publish") {
+          assertMutationRequest(event, dependencies.portalOrigin, active.session.csrfTokenHash);
+          if (!admin) return json(403, { error: "forbidden" });
+          const body = JSON.parse(event.body ?? "{}") as Record<string, unknown>;
+          const input = publishPortalReportRequestSchema.parse({
+            reportType: body.reportType,
+            uploadId: body.uploadId,
+            key: body.key,
+            filename: body.filename,
+            contentType: body.contentType,
+            sizeBytes: body.sizeBytes,
+            expectedRevision: body.expectedRevision,
+          });
+          const targetOrganizationId = await targetPortalOrganization(body.clientPrefix);
+          return json(200, await publishPortalReport(
+            targetOrganizationId,
+            opaqueIdSchema.parse(body.buildingId),
+            opaqueIdSchema.parse(body.inspectionId),
+            input,
+            portalMutationContext("PORTAL_REPORT_PUBLISHED"),
+          ));
+        }
+        if (method === "POST" && path === "/bff/portal/report-preview") {
+          assertMutationRequest(event, dependencies.portalOrigin, active.session.csrfTokenHash);
+          if (!admin) return json(403, { error: "forbidden" });
+          const body = JSON.parse(event.body ?? "{}") as Record<string, unknown>;
+          const input = portalReportActionRequestSchema.parse({
+            buildingId: body.buildingId,
+            inspectionId: body.inspectionId,
+            reportType: body.reportType,
+            clientPrefix: body.clientPrefix,
+          });
+          const targetOrganizationId = await targetPortalOrganization(input.clientPrefix);
+          return json(200, await previewPortalReportReview(
+            targetOrganizationId,
+            input.buildingId,
+            input.inspectionId,
+            input.reportType,
+          ));
+        }
+        if (method === "POST" && path === "/bff/portal/report-approve") {
+          assertMutationRequest(event, dependencies.portalOrigin, active.session.csrfTokenHash);
+          if (!admin) return json(403, { error: "forbidden" });
+          const body = JSON.parse(event.body ?? "{}") as Record<string, unknown>;
+          const input = portalReportActionRequestSchema.parse({
+            buildingId: body.buildingId,
+            inspectionId: body.inspectionId,
+            reportType: body.reportType,
+            clientPrefix: body.clientPrefix,
+          });
+          const targetOrganizationId = await targetPortalOrganization(input.clientPrefix);
+          return json(200, await approvePortalReportReview(
+            targetOrganizationId,
+            input.buildingId,
+            input.inspectionId,
+            input.reportType,
+            portalMutationContext("PORTAL_REPORT_APPROVED"),
           ));
         }
         if (method === "POST" && path === "/bff/portal/artifact-access") {
@@ -1058,20 +1138,6 @@ function clientMayOpenKey(status: Record<string, unknown>, key: string): boolean
   if (!inHistory) return true;
   if (status.historyHidden) return false;
   return !hiddenHistoryKeys(status).includes(key);
-}
-
-function rememberReport(status: Record<string, unknown>, reportType: string, report: Record<string, unknown>, stale: boolean): void {
-  const key = String(report.approvedKey || "");
-  if (!key) return;
-  const history = Array.isArray(status.history) ? status.history as Array<Record<string, unknown>> : [];
-  history.push({
-    reportType,
-    key,
-    label: stale ? "Stale" : "Approved",
-    stale,
-    at: new Date().toISOString(),
-  });
-  status.history = history;
 }
 
 function markEditedReportsStale(status: Record<string, unknown>, onlyType?: string): void {

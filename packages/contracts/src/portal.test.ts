@@ -6,6 +6,7 @@ import {
   portalBuildingDetailSchema,
   portalBuildingIdResponseSchema,
   portalBuildingListResponseSchema,
+  portalReportUploadRequestSchema,
   updatePortalInspectionRequestSchema,
 } from "./portal";
 
@@ -92,5 +93,59 @@ describe("administrator read contracts", () => {
     for (const prefix of ["..", ".", "client/robot", "client\\robot"]) {
       expect(portalAdminClientListSchema.safeParse({ items: [{ organizationId: "org_0123456789abcdef", displayName: "Client", clientPrefixes: [prefix] }] }).success).toBe(false);
     }
+  });
+});
+
+describe("portal report upload and publish contracts", () => {
+  it("enforces type-specific size and format limits", () => {
+    const validEvidence = {
+      reportType: "EVIDENCE",
+      filename: "evidence.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 250 * 1024 * 1024,
+    };
+    expect(portalReportUploadRequestSchema.safeParse(validEvidence).success).toBe(true);
+
+    // Evidence over 300 MB fails
+    expect(portalReportUploadRequestSchema.safeParse({
+      ...validEvidence,
+      sizeBytes: 300 * 1024 * 1024 + 1,
+    }).success).toBe(false);
+
+    // Assessment at 100 MB succeeds, over 100 MB fails
+    expect(portalReportUploadRequestSchema.safeParse({
+      reportType: "ASSESSMENT",
+      filename: "assessment.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 100 * 1024 * 1024,
+    }).success).toBe(true);
+    expect(portalReportUploadRequestSchema.safeParse({
+      reportType: "ASSESSMENT",
+      filename: "assessment.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 100 * 1024 * 1024 + 1,
+    }).success).toBe(false);
+
+    // Non-as-built cannot be image
+    expect(portalReportUploadRequestSchema.safeParse({
+      reportType: "ASSESSMENT",
+      filename: "assessment.png",
+      contentType: "image/png",
+      sizeBytes: 1024,
+    }).success).toBe(false);
+
+    // As-built accepts PNG and JPEG up to 50 MB
+    expect(portalReportUploadRequestSchema.safeParse({
+      reportType: "AS_BUILT",
+      filename: "asbuilt.png",
+      contentType: "image/png",
+      sizeBytes: 40 * 1024 * 1024,
+    }).success).toBe(true);
+    expect(portalReportUploadRequestSchema.safeParse({
+      reportType: "AS_BUILT",
+      filename: "asbuilt.png",
+      contentType: "image/png",
+      sizeBytes: 50 * 1024 * 1024 + 1,
+    }).success).toBe(false);
   });
 });

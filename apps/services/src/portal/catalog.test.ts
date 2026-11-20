@@ -145,4 +145,50 @@ describe("fresh catalog artifact resolution", () => {
     await expect(resolvePortalArtifact("org-client", buildingId, inspectionId, "AS_BUILT"))
       .rejects.toMatchObject({ code: "NOT_FOUND" });
   });
+
+  it("serves custom uploaded reports from inspection.reports and handles up to 300 MB Evidence", async () => {
+    const evidenceReport = {
+      key: `reportgen_portal/reports/org-client/${buildingId}/${inspectionId}/drafts/upl_${"b".repeat(32)}/evidence.pdf`,
+      filename: "custom-evidence.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 250 * 1024 * 1024,
+      publishedAt: "2026-10-02T00:00:00Z",
+    };
+    vi.mocked(DynamoDBDocumentClient.prototype.send).mockResolvedValue({
+      Item: {
+        ...building,
+        inspections: [{
+          ...building.inspections[0],
+          reports: { EVIDENCE: evidenceReport },
+        }],
+      },
+    } as never);
+    await expect(resolvePortalArtifact("org-client", buildingId, inspectionId, "EVIDENCE"))
+      .resolves.toMatchObject({
+        key: evidenceReport.key,
+        filename: "Midland Business Park - Inspection Evidence.pdf",
+        contentType: "application/pdf",
+      });
+  });
+
+  it("surfaces pendingReview metadata when a report is awaiting client admin approval", async () => {
+    mockStatus({
+      reports: {
+        ASSESSMENT: {
+          approvedKey: key,
+          sourceKey: key,
+          clientVisible: false,
+          awaitingClientAdmin: true,
+          stale: false,
+          generatedAt: "2026-10-05T12:00:00.000Z",
+        },
+      },
+    });
+    const detail = await getPortalCatalogBuilding("org-client", buildingId, true);
+    const assessment = detail.latestInspection?.reports.find((r) => r.reportType === "ASSESSMENT");
+    expect(assessment?.pendingReview).toEqual({
+      sourceKey: key,
+      generatedAt: "2026-10-05T12:00:00.000Z",
+    });
+  });
 });

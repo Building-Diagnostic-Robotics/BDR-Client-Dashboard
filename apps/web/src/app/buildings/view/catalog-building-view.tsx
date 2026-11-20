@@ -2,9 +2,11 @@
 
 import {
   artifactAccessResponseSchema,
-  portalAsBuiltUploadResponseSchema,
+  maxReportSizeBytes,
   portalBuildingDetailSchema,
   portalInspectionCandidateListSchema,
+  portalReportPreviewResponseSchema,
+  portalReportUploadResponseSchema,
   type PortalBuildingDetail,
   type PortalInspection,
   type PortalInspectionCandidate,
@@ -58,7 +60,8 @@ type PageState =
   | { status: "not-found" }
   | { status: "error" };
 
-type PendingAsBuilt = {
+type StagedReport = {
+  reportType: PortalReportType;
   file: File;
   filename: string;
   contentType: "application/pdf" | "image/png" | "image/jpeg";
@@ -328,7 +331,7 @@ export function AdminControls({
   const [candidates, setCandidates] = useState<PortalInspectionCandidate[] | null>(null);
   const [selectedSource, setSelectedSource] = useState("");
   const [included, setIncluded] = useState<string[]>([]);
-  const [pendingAsBuilt, setPendingAsBuilt] = useState<Record<string, PendingAsBuilt>>({});
+  const [stagedReports, setStagedReports] = useState<Record<string, Partial<Record<PortalReportType, StagedReport>>>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -387,51 +390,80 @@ export function AdminControls({
     }
   }
 
-  function stageAsBuilt(inspection: PortalInspection, file: File) {
+  function stageReport(inspection: PortalInspection, reportType: PortalReportType, file: File) {
     setError(null);
     let contentType = file.type;
     const lowerName = file.name.toLowerCase();
-    if (!contentType && (lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg"))) {
-      contentType = "image/jpeg";
+    if (!contentType) {
+      if (lowerName.endsWith(".pdf")) contentType = "application/pdf";
+      else if (lowerName.endsWith(".png")) contentType = "image/png";
+      else if (lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg")) contentType = "image/jpeg";
     } else if (contentType === "image/jpg") {
       contentType = "image/jpeg";
     }
 
-    if (!["application/pdf", "image/png", "image/jpeg"].includes(contentType) || file.size > 50 * 1024 * 1024) {
-      setError("Choose a PDF, PNG, or JPEG smaller than 50 MB.");
+    if (reportType === "AS_BUILT") {
+      if (!["application/pdf", "image/png", "image/jpeg"].includes(contentType)) {
+        setError("As-built must be a PDF, PNG, or JPEG.");
+        return;
+      }
+    } else {
+      if (contentType !== "application/pdf") {
+        setError(`${REPORT_CONTENT[reportType].name} must be a PDF.`);
+        return;
+      }
+    }
+
+    const maxSize = maxReportSizeBytes(reportType);
+    if (file.size > maxSize || file.size <= 0) {
+      setError(`File exceeds the limit of ${maxSize / (1024 * 1024)} MB for ${REPORT_CONTENT[reportType].name}.`);
       return;
     }
-    setPendingAsBuilt((current) => ({
+
+    setStagedReports((current) => ({
       ...current,
       [inspection.inspectionId]: {
-        file,
-        filename: file.name,
-        contentType: contentType as PendingAsBuilt["contentType"],
-        sizeBytes: file.size,
+        ...(current[inspection.inspectionId] ?? {}),
+        [reportType]: {
+          reportType,
+          file,
+          filename: file.name,
+          contentType: contentType as StagedReport["contentType"],
+          sizeBytes: file.size,
+        },
       },
     }));
   }
 
-  async function publishAsBuilt(inspection: PortalInspection, pending: PendingAsBuilt) {
+  function discardStagedReport(inspectionId: string, reportType: PortalReportType) {
+    setStagedReports((current) => {
+      const inspectionStaged = { ...(current[inspectionId] ?? {}) };
+      delete inspectionStaged[reportType];
+      return { ...current, [inspectionId]: inspectionStaged };
+    });
+  }
+
+  async function publishStagedReport(inspection: PortalInspection, staged: StagedReport) {
     setBusy(true);
     setError(null);
     try {
       const persisted = await ensurePersisted();
       if (!persisted.revision) throw new Error("missing_revision");
-      const upload = await postClient("/bff/portal/as-built-upload", {
+      const upload = await postClient("/bff/portal/report-upload", {
         buildingId: persisted.buildingId,
         clientPrefix,
         inspectionId: inspection.inspectionId,
-        filename: pending.filename,
-        contentType: pending.contentType,
-        sizeBytes: pending.sizeBytes,
-      }, portalAsBuiltUploadResponseSchema);
+        reportType: staged.reportType,
+        filename: staged.filename,
+        contentType: staged.contentType,
+        sizeBytes: staged.sizeBytes,
+      }, portalReportUploadResponseSchema);
       let response: Response;
       try {
         response = await fetch(upload.url, {
           method: "PUT",
-          headers: { "content-type": pending.contentType },
-          body: pending.file,
+          headers: { "content-type": staged.contentType },
+          body: staged.file,
           credentials: "omit",
           cache: "no-store",
         });
@@ -439,31 +471,70 @@ export function AdminControls({
         throw new Error("upload_network_failed");
       }
       if (!response.ok) throw new Error("upload_failed");
-      const next = await postClient("/bff/portal/as-built-publish", {
+      const next = await postClient("/bff/portal/report-publish", {
         buildingId: persisted.buildingId,
         clientPrefix,
         inspectionId: inspection.inspectionId,
+        reportType: staged.reportType,
         uploadId: upload.uploadId,
         key: upload.key,
-        filename: pending.filename,
-        contentType: pending.contentType,
-        sizeBytes: pending.sizeBytes,
+        filename: staged.filename,
+        contentType: staged.contentType,
+        sizeBytes: staged.sizeBytes,
         expectedRevision: persisted.revision,
       }, portalBuildingDetailSchema);
-      setPendingAsBuilt((current) => {
-        const nextPending = { ...current };
-        delete nextPending[inspection.inspectionId];
-        return nextPending;
-      });
+      discardStagedReport(inspection.inspectionId, staged.reportType);
       onChanged(next);
     } catch (reason) {
       if (reason instanceof ClientApiError && reason.status === 409) {
         setError("The building changed while this file was being published. Reload and review it before retrying.");
       } else if (reason instanceof Error && reason.message === "upload_network_failed") {
-        setError("The As-built file upload failed. Check your network connection and storage CORS settings.");
+        setError(`The ${REPORT_CONTENT[staged.reportType].name} upload failed. Check your network connection and storage CORS settings.`);
       } else {
-        setError("The As-built file could not be published.");
+        setError(`The ${REPORT_CONTENT[staged.reportType].name} could not be published.`);
       }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function previewReportGenDraft(inspection: PortalInspection, reportType: PortalReportType) {
+    setError(null);
+    const tab = window.open("about:blank", "_blank");
+    if (!tab) {
+      setError("Allow pop-ups to preview this report draft.");
+      return;
+    }
+    tab.opener = null;
+    try {
+      const result = await postClient("/bff/portal/report-preview", {
+        buildingId: building.buildingId,
+        inspectionId: inspection.inspectionId,
+        reportType,
+        ...(clientPrefix ? { clientPrefix } : {}),
+      }, portalReportPreviewResponseSchema);
+      tab.location.href = result.url;
+    } catch {
+      tab.close();
+      setError(`The draft for ${REPORT_CONTENT[reportType].name} could not be opened.`);
+    }
+  }
+
+  async function approveReportGenDraft(inspection: PortalInspection, reportType: PortalReportType) {
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await postClient("/bff/portal/report-approve", {
+        buildingId: building.buildingId,
+        inspectionId: inspection.inspectionId,
+        reportType,
+        ...(clientPrefix ? { clientPrefix } : {}),
+      }, portalBuildingDetailSchema);
+      onChanged(next);
+    } catch (reason) {
+      setError(reason instanceof ClientApiError && reason.status === 409
+        ? "These details changed in another session. Reload before trying again."
+        : `The ${REPORT_CONTENT[reportType].name} draft could not be approved.`);
     } finally {
       setBusy(false);
     }
@@ -532,66 +603,129 @@ export function AdminControls({
         </form>
       ) : null}
 
-      <h3>Client report classifications</h3>
-      {building.inspections.map((inspection) => (
-        <form className={styles.formGrid} key={inspection.inspectionId} onSubmit={(event) => {
-          event.preventDefault();
-          void saveStatuses(inspection, event.currentTarget);
-        }}>
-          <strong>{inspection.scannedAt ? formatShortDate(inspection.scannedAt, inspection.timeZone ?? undefined) : "Undated inspection"}</strong>
-          <div className={styles.adminRows}>
-            {inspection.reports.map((report) => (
-              <label className={styles.adminRow} key={report.reportType}>
-                <span>{REPORT_CONTENT[report.reportType].name}</span>
-                <select name={report.reportType} defaultValue={report.deliveryStatus === "AVAILABLE" ? "IN_PREPARATION" : report.deliveryStatus} disabled={report.deliveryStatus === "AVAILABLE"}>
-                  {report.deliveryStatus === "AVAILABLE" ? <option value="IN_PREPARATION">Available</option> : null}
-                  <option value="IN_PREPARATION">In preparation</option>
-                  <option value="NOT_INCLUDED">Not included</option>
-                </select>
-              </label>
-            ))}
-          </div>
-          <button className="button button--outline" type="submit" disabled={busy}>Save classifications</button>
-          <label>Choose As-built file
-            <input
-              type="file"
-              accept="application/pdf,image/png,image/jpeg"
-              disabled={busy}
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) stageAsBuilt(inspection, file);
-                event.currentTarget.value = "";
-              }}
-            />
-            <span className={styles.help}>PDF, PNG, or JPEG. The file stays local until you explicitly publish it.</span>
-          </label>
-          {pendingAsBuilt[inspection.inspectionId] ? (
-            <div className={styles.actions}>
-              <span>Draft ready: {pendingAsBuilt[inspection.inspectionId]!.filename}</span>
-              <button
-                className="button button--primary"
-                type="button"
-                disabled={busy}
-                onClick={() => void publishAsBuilt(inspection, pendingAsBuilt[inspection.inspectionId]!)}
-              >
-                {busy ? "Publishing…" : "Publish As-built"}
-              </button>
-              <button
-                className="button button--outline"
-                type="button"
-                disabled={busy}
-                onClick={() => setPendingAsBuilt((current) => {
-                  const next = { ...current };
-                  delete next[inspection.inspectionId];
-                  return next;
-                })}
-              >
-                Discard draft
-              </button>
+      <h3>Client report classifications & report replacement</h3>
+      {building.inspections.map((inspection) => {
+        const stagedForInspection = stagedReports[inspection.inspectionId] ?? {};
+        return (
+          <div className={styles.formGrid} key={inspection.inspectionId}>
+            <strong>{inspection.scannedAt ? formatShortDate(inspection.scannedAt, inspection.timeZone ?? undefined) : "Undated inspection"}</strong>
+            <form className={styles.formGrid} onSubmit={(event) => {
+              event.preventDefault();
+              void saveStatuses(inspection, event.currentTarget);
+            }}>
+              <div className={styles.adminRows}>
+                {inspection.reports.map((report) => (
+                  <label className={styles.adminRow} key={report.reportType}>
+                    <span>{REPORT_CONTENT[report.reportType].name}</span>
+                    <select name={report.reportType} defaultValue={report.deliveryStatus === "AVAILABLE" ? "IN_PREPARATION" : report.deliveryStatus} disabled={report.deliveryStatus === "AVAILABLE"}>
+                      {report.deliveryStatus === "AVAILABLE" ? <option value="IN_PREPARATION">Available</option> : null}
+                      <option value="IN_PREPARATION">In preparation</option>
+                      <option value="NOT_INCLUDED">Not included</option>
+                    </select>
+                  </label>
+                ))}
+              </div>
+              <button className="button button--outline" type="submit" disabled={busy}>Save classifications</button>
+            </form>
+
+            <div className={styles.adminRows}>
+              {inspection.reports.map((report) => {
+                const content = REPORT_CONTENT[report.reportType];
+                const staged = stagedForInspection[report.reportType];
+                const acceptTypes = report.reportType === "AS_BUILT"
+                  ? "application/pdf,image/png,image/jpeg"
+                  : "application/pdf";
+                const isAvailable = report.deliveryStatus === "AVAILABLE";
+
+                return (
+                  <div className={styles.adminReportItem} key={report.reportType}>
+                    <div className={styles.adminReportHeader}>
+                      <h4>{content.name}</h4>
+                      <span className={`status ${statusClass(report)}`}>
+                        <span className="status__dot" aria-hidden="true" />
+                        {STATUS_LABEL[report.deliveryStatus]}
+                        {isAvailable && report.publishedAt ? ` · ${formatReportUpdatedDate(report.publishedAt)}` : ""}
+                      </span>
+                    </div>
+
+                    {report.pendingReview ? (
+                      <div className={styles.reviewAlert} role="status">
+                        <p>
+                          New ReportGen draft waiting for review
+                          {report.pendingReview.generatedAt ? ` (generated ${formatShortDate(report.pendingReview.generatedAt)})` : ""}.
+                        </p>
+                        <div className={styles.reviewActions}>
+                          <button
+                            className="button button--outline button--sm"
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void previewReportGenDraft(inspection, report.reportType)}
+                          >
+                            Preview draft
+                          </button>
+                          <button
+                            className="button button--primary button--sm"
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void approveReportGenDraft(inspection, report.reportType)}
+                          >
+                            Approve & Publish
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    <label>
+                      {isAvailable ? `Replace ${content.name} from laptop` : `Upload ${content.name} from laptop`}
+                      <input
+                        type="file"
+                        accept={acceptTypes}
+                        disabled={busy}
+                        onChange={(event) => {
+                          const file = event.target.files?.[0];
+                          if (file) stageReport(inspection, report.reportType, file);
+                          event.currentTarget.value = "";
+                        }}
+                      />
+                      <span className={styles.help}>
+                        {report.reportType === "AS_BUILT"
+                          ? "PDF, PNG, or JPEG up to 50 MB. The file stays local until you explicitly publish it."
+                          : report.reportType === "EVIDENCE"
+                          ? "PDF up to 300 MB. The file stays local until you explicitly publish it."
+                          : "PDF up to 100 MB. The file stays local until you explicitly publish it."}
+                      </span>
+                    </label>
+
+                    {staged ? (
+                      <div className={styles.stagedBanner}>
+                        <span>Draft ready: {staged.filename} ({(staged.sizeBytes / (1024 * 1024)).toFixed(1)} MB)</span>
+                        <div className={styles.actions}>
+                          <button
+                            className="button button--primary button--sm"
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void publishStagedReport(inspection, staged)}
+                          >
+                            {busy ? "Publishing…" : isAvailable ? "Publish replacement" : "Publish report"}
+                          </button>
+                          <button
+                            className="button button--outline button--sm"
+                            type="button"
+                            disabled={busy}
+                            onClick={() => discardStagedReport(inspection.inspectionId, report.reportType)}
+                          >
+                            Discard draft
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
             </div>
-          ) : null}
-        </form>
-      ))}
+          </div>
+        );
+      })}
     </section>
   );
 }
